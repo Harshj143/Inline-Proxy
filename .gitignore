@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Runtime artifacts — the gateway writes these; they are not source
+audit.log
+*.audit.log
+audit*.jsonl
+
+# Demo/sandbox scratch (real files the filesystem demo writes to)
+sandbox/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Claude Code project settings (local, not shared)
+.claude/

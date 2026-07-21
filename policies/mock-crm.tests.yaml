@@ -1,0 +1,102 @@
+# Golden decision tests for policies/mock-crm.yaml.
+# Run:  mcp-gateway policy test --policy policies/mock-crm.yaml --tests policies/mock-crm.tests.yaml
+# Also enforced in CI via tests/unit/test_goldens.py.
+
+tests:
+  - name: public docs search is allowed
+    tool: search.docs
+    arguments: { q: "getting started" }
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: unknown tool meets default deny
+    tool: filesystem.delete_everything
+    expect:
+      outcome: deny
+      action: block
+      stage: action
+      reason_contains: default policy
+
+  - name: unbounded SELECT gets a LIMIT appended
+    tool: db.execute_sql
+    arguments: { sql: "SELECT * FROM customers" }
+    expect:
+      outcome: allow
+      action: rewrite
+      rewritten:
+        sql: "SELECT * FROM customers LIMIT 1000"
+
+  - name: SELECT with existing LIMIT is left alone
+    tool: db.execute_sql
+    arguments: { sql: "SELECT id FROM customers LIMIT 5" }
+    expect:
+      outcome: allow
+      action: rewrite
+      rewritten:
+        sql: "SELECT id FROM customers LIMIT 5"
+
+  - name: non-SELECT SQL violates the read-only constraint
+    tool: db.execute_sql
+    arguments: { sql: "DROP TABLE customers" }
+    expect:
+      outcome: deny
+      stage: constraints
+      reason_contains: read-only SELECT
+
+  - name: constraint denies before rewrite could run (missing arg)
+    tool: db.execute_sql
+    arguments: {}
+    expect:
+      outcome: deny
+      stage: constraints
+
+  - name: customer record without role fails closed until redaction lands
+    tool: crm.get_customer
+    arguments: { id: "8842" }
+    expect:
+      outcome: deny
+      action: redact
+      stage: action
+      reason_contains: failing closed
+
+  - name: admin role overlay sees raw customer data
+    tool: crm.get_customer
+    role: admin
+    arguments: { id: "8842" }
+    expect:
+      outcome: allow
+      action: allow
+      reason_contains: cleared to see raw
+
+  - name: analyst role overlay still fails closed until redaction lands
+    tool: crm.get_customer
+    role: analyst
+    arguments: { id: "8842" }
+    expect:
+      outcome: deny
+      action: redact
+
+  - name: log tail is quarantined, not blocked
+    tool: logs.tail
+    arguments: { path: "/var/log/app" }
+    expect:
+      outcome: allow
+      action: quarantine
+      disposition: quarantine
+
+  - name: destructive admin action fails closed until approvals land
+    tool: admin.delete_user
+    arguments: { id: "8842" }
+    expect:
+      outcome: deny
+      action: require_approval
+      reason_contains: approval broker
+
+  - name: web fetch blocked until taint tracking lands
+    tool: web.fetch
+    arguments: { url: "https://example.com" }
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: taint

@@ -1,0 +1,32 @@
+{
+  "_comment": "Policy for the REAL @modelcontextprotocol/server-filesystem. Tool names here are the server's actual tools (verified via tools/list). Reads are redacted so PII on disk never reaches the model; writes/edits/moves need a human to sign off; listing and search are allowed; everything else is default-deny.",
+
+  "default_action": "block",
+  "tools": {
+    "read_text_file":     {"action": "redact", "reason": "file contents may contain PII; strip before the model sees them"},
+    "read_file":          {"action": "redact", "reason": "file contents may contain PII; strip before the model sees them"},
+    "read_multiple_files":{"action": "redact", "reason": "file contents may contain PII; strip before the model sees them"},
+    "read_media_file":    {"action": "allow",  "reason": "binary media, no text PII to scrub"},
+
+    "list_directory":            {"action": "allow"},
+    "list_directory_with_sizes": {"action": "allow"},
+    "directory_tree":            {"action": "allow"},
+    "search_files":              {"action": "allow"},
+    "get_file_info":             {"action": "allow"},
+    "list_allowed_directories":  {"action": "allow"},
+    "create_directory":          {"action": "allow"},
+
+    "write_file": {"action": "require_approval", "then": "allow",
+                   "reason": "writing to disk is a real mutation; a human must sign off"},
+    "edit_file":  {"action": "require_approval", "then": "allow",
+                   "reason": "editing a file on disk is a real mutation; a human must sign off"},
+    "move_file":  {"action": "require_approval", "then": "allow",
+                   "reason": "moving/renaming a file is a real mutation; a human must sign off"}
+  },
+
+  "redact_entities": ["EMAIL", "PHONE", "SSN", "CREDIT_CARD", "IP_ADDRESS"],
+
+  "_taint_note": "Taint tracking is intentionally OFF here: on a filesystem every read looks alike, so tainting on read would block normal read-then-edit workflows. Taint is meant for an UNTRUSTED source (e.g. web.fetch) and is demonstrated in demo/attack_scenario.py. To enable it here, add e.g. \"taint_sources\": [\"read_text_file\"] and \"taint_sinks\": [\"write_file\"].",
+  "taint_sources": [],
+  "taint_sinks": []
+}

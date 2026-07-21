@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=./policy.schema.json
+#
+# The prototype's policies.json converted to the v1 pack format — the
+# reference policy for the mock CRM server (demo/mock_server.py).
+#
+# Deliberately deferred from the prototype original (feature lands, rule
+# returns — until then the engine fails CLOSED wherever these would apply):
+#   redact_entities                → redaction profiles, Phase 2
+#   taint_sources / taint_sinks    → session taint tracking, Phase 3
+#   sequence_rules                 → sequence-aware policies, Phase 3
+# Because web.fetch/http.post were only safe under taint tracking, they are
+# BLOCKED here rather than allowed-without-the-guard (fail closed; Phase 3
+# restores the conditional allow).
+
+schema_version: 1
+name: mock-crm
+default_action: block
+
+tools:
+  crm.get_customer:
+    action: redact           # fails closed until Phase 2's redaction engine
+    reason: customer records contain PII; strip before the LLM sees them
+    roles:
+      admin:
+        action: allow
+        reason: admins are cleared to see raw customer PII
+      analyst:
+        action: redact
+        reason: analysts see masked PII only
+
+  search.docs:
+    action: allow
+    reason: public documentation search, no sensitive data
+
+  web.fetch:
+    action: block
+    reason: untrusted web content requires taint tracking (Phase 3); blocked until then
+
+  http.post:
+    action: block
+    reason: outbound POST requires taint tracking to be safe (Phase 3); blocked until then
+
+  db.execute_sql:
+    action: rewrite
+    reason: read-only analytics access; unbounded queries are capped
+    constraints:
+      - arg: sql
+        must_match: '^\s*SELECT\b'
+        flags: i
+        reason: only read-only SELECT statements are permitted for agent identities
+    rewrites:
+      - arg: sql
+        append: " LIMIT 1000"
+        unless_match: '\blimit\b'
+        flags: i
+
+  logs.tail:
+    action: quarantine
+    reason: raw logs may contain secrets; result withheld from the model and flagged for review
+
+  admin.delete_user:
+    action: require_approval   # fails closed until Phase 3's approval broker
+    then: allow
+    reason: destructive admin action requires a human to sign off

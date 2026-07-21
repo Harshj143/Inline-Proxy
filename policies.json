@@ -1,0 +1,64 @@
+{
+  "default_action": "block",
+  "tools": {
+    "crm.get_customer": {
+      "action": "redact",
+      "reason": "customer records contain PII; strip before the LLM sees them",
+      "roles": {
+        "admin": {"action": "allow", "reason": "admins are cleared to see raw customer PII"},
+        "analyst": {"action": "redact", "reason": "analysts see masked PII only"}
+      }
+    },
+    "search.docs": {
+      "action": "allow",
+      "reason": "public documentation search, no sensitive data"
+    },
+    "web.fetch": {
+      "action": "allow",
+      "reason": "public web fetch; but marks the session as tainted"
+    },
+    "http.post": {
+      "action": "allow",
+      "reason": "outbound HTTP; allowed only while the session is clean"
+    },
+    "db.execute_sql": {
+      "action": "rewrite",
+      "reason": "read-only analytics access; unbounded queries are capped",
+      "rewrites": [
+        {
+          "arg": "sql",
+          "append": " LIMIT 1000",
+          "unless_match": "\\blimit\\b",
+          "flags": "i"
+        }
+      ],
+      "constraints": [
+        {
+          "arg": "sql",
+          "must_match": "^\\s*SELECT\\b",
+          "flags": "i",
+          "reason": "only read-only SELECT statements are permitted for agent identities"
+        }
+      ]
+    },
+    "logs.tail": {
+      "action": "quarantine",
+      "reason": "raw logs may contain secrets; result withheld from the model and flagged for review"
+    },
+    "admin.delete_user": {
+      "action": "require_approval",
+      "then": "allow",
+      "reason": "destructive admin action requires a human to sign off"
+    }
+  },
+  "redact_entities": ["EMAIL", "PHONE", "SSN", "CREDIT_CARD", "IP_ADDRESS"],
+  "taint_sources": ["web.fetch"],
+  "taint_sinks": ["http.post", "db.execute_sql"],
+  "sequence_rules": [
+    {
+      "after": "crm.get_customer",
+      "forbid": "http.post",
+      "reason": "outbound POST is forbidden after reading customer PII in the same session (exfiltration guard)"
+    }
+  ]
+}

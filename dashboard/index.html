@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Security Gateway — Ops Console</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3Z"
+              fill="none" stroke="currentColor" stroke-width="1.6"
+              stroke-linejoin="round"/>
+        <path d="M9 12l2 2 4-4" fill="none" stroke="currentColor"
+              stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="brand-name">MCP Security Gateway</span>
+      <span class="brand-sub">Ops Console</span>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-view="live">Live</button>
+      <button class="tab" data-view="sessions">Sessions</button>
+      <button class="tab" data-view="policy">Policy</button>
+    </nav>
+    <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">connecting</span></div>
+  </header>
+
+  <main class="view" id="view-live">
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-label">Risk score</div>
+        <div class="metric-value" id="m-score">0
+          <span class="badge lvl-NORMAL" id="m-level">NORMAL</span>
+        </div>
+        <div class="gauge"><i id="m-gauge"></i></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Taint state</div>
+        <div class="metric-value"><span class="badge taint-clean" id="m-taint">CLEAN</span></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Redactions</div>
+        <div class="metric-value" id="m-redactions">0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Blocked</div>
+        <div class="metric-value" id="m-blocked">0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Approvals pending</div>
+        <div class="metric-value" id="m-approvals">0</div>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Risk over time</h2>
+        <span class="muted" id="chart-note">waiting for activity</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    </section>
+
+    <section class="card" id="approvals-card" hidden>
+      <div class="card-head">
+        <h2>Pending approvals</h2>
+        <span class="muted">a human decision is required before these run</span>
+      </div>
+      <div id="approvals"></div>
+    </section>
+
+    <section class="card">
+      <div class="feed-toolbar">
+        <div class="search-wrap">
+          <input id="search" type="text" placeholder="Search tool or reason" autocomplete="off">
+        </div>
+        <div class="chips" id="chips"></div>
+        <button class="btn" id="pause">Pause</button>
+      </div>
+      <div class="replay-banner" id="replay-banner" hidden>
+        <span id="replay-text"></span>
+        <button class="btn btn-small" id="exit-replay">Back to live</button>
+      </div>
+      <div class="feed" id="feed"></div>
+      <div class="feed-empty" id="feed-empty">No decisions yet. Start a gateway session pointed at this audit log.</div>
+    </section>
+  </main>
+
+  <main class="view" id="view-sessions" hidden>
+    <div class="card-head sessions-head">
+      <h2>Session history</h2>
+      <button class="btn btn-small" id="refresh-sessions">Refresh</button>
+    </div>
+    <div class="sessions" id="sessions"></div>
+  </main>
+
+  <main class="view" id="view-policy" hidden>
+    <div class="card policy-hero">
+      <div>
+        <div class="eyebrow">Active policy</div>
+        <h2 id="policy-title">Loading policy</h2>
+        <p id="policy-path">Waiting for console API.</p>
+      </div>
+      <button class="btn btn-small" id="refresh-policy">Refresh</button>
+    </div>
+
+    <div class="policy-grid">
+      <section class="card">
+        <div class="card-head">
+          <h2>Policy posture</h2>
+          <span class="muted">session, request, response</span>
+        </div>
+        <div class="policy-summary" id="policy-summary"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Stateful controls</h2>
+          <span class="muted">taint and sequence rules</span>
+        </div>
+        <div class="policy-summary" id="policy-stateful"></div>
+      </section>
+    </div>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Tool rules</h2>
+        <span class="muted" id="policy-tool-count">0 tools</span>
+      </div>
+      <div class="policy-table" id="policy-tools"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Policy backtesting</h2>
+        <span class="muted">replay audit history before enforcing a new policy</span>
+      </div>
+      <div class="backtest-editor">
+        <textarea id="backtest-policy" spellcheck="false"></textarea>
+        <div class="backtest-actions">
+          <button class="btn btn-primary" id="run-backtest">Run backtest</button>
+          <button class="btn" id="reset-backtest-policy">Reset to active policy</button>
+          <span class="muted" id="backtest-status">Paste a candidate policy or edit the active one.</span>
+        </div>
+      </div>
+      <div class="backtest-summary" id="backtest-summary" hidden></div>
+      <div class="backtest-results" id="backtest-results"></div>
+    </section>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

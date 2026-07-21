@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcp-gateway.dev/schemas/policy-v1.json",
+  "title": "MCP Security Gateway policy document (schema_version 1)",
+  "description": "One policy layer. Layers merge in CLI order: base < connector pack < company override. Reference this schema from YAML/JSON policy files for editor autocomplete.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Layer name used in audit attribution and `policy show`. Defaults to the file stem."
+    },
+    "default_action": {
+      "enum": ["allow", "block"],
+      "description": "Action for tools no rule matches. Omit in override layers to inherit."
+    },
+    "tools": {
+      "type": "object",
+      "description": "Tool name or glob pattern (fnmatch: * ? [seq]) → rule. Exact names beat globs; more-specific globs beat less-specific.",
+      "additionalProperties": { "$ref": "#/$defs/rule" }
+    }
+  },
+  "$defs": {
+    "action": {
+      "enum": ["allow", "block", "redact", "rewrite", "quarantine", "require_approval"]
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": { "$ref": "#/$defs/action" },
+        "reason": { "type": "string" },
+        "then": {
+          "$ref": "#/$defs/action",
+          "description": "For require_approval: the action applied once a human approves. Default allow."
+        },
+        "replace": {
+          "type": "boolean",
+          "description": "In an override layer: discard lower layers' fields for this pattern instead of field-merging."
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/constraint" }
+        },
+        "rewrites": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rewrite" }
+        },
+        "roles": {
+          "type": "object",
+          "description": "Per-role overlay: replaces only the fields it names for callers with that role.",
+          "additionalProperties": { "$ref": "#/$defs/overlay" }
+        }
+      }
+    },
+    "overlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": { "$ref": "#/$defs/action" },
+        "reason": { "type": "string" },
+        "then": { "$ref": "#/$defs/action" },
+        "constraints": { "type": "array", "items": { "$ref": "#/$defs/constraint" } },
+        "rewrites": { "type": "array", "items": { "$ref": "#/$defs/rewrite" } }
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arg"],
+      "anyOf": [
+        { "required": ["must_match"] },
+        { "required": ["must_not_match"] }
+      ],
+      "properties": {
+        "type": { "const": "regex", "default": "regex" },
+        "arg": { "type": "string", "minLength": 1 },
+        "must_match": { "type": "string", "format": "regex" },
+        "must_not_match": { "type": "string", "format": "regex" },
+        "flags": { "enum": ["", "i"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "rewrite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arg"],
+      "oneOf": [
+        { "required": ["set"], "not": { "required": ["append"] } },
+        { "required": ["append"], "not": { "required": ["set"] } }
+      ],
+      "properties": {
+        "arg": { "type": "string", "minLength": 1 },
+        "set": { "description": "Force the argument to this fixed value." },
+        "append": {
+          "type": "string",
+          "description": "Append to a string argument, unless unless_match already matches."
+        },
+        "unless_match": { "type": "string", "format": "regex" },
+        "flags": { "enum": ["", "i"] }
+      }
+    }
+  }
+}
