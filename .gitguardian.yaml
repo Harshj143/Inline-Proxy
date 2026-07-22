@@ -1,0 +1,21 @@
+# GitGuardian configuration.
+#
+# This is a REDACTION security product: its detector test suite and eval corpus
+# deliberately contain FAKE example secrets so we can prove the gateway catches
+# and scrubs them. None of the values below are real credentials — they are
+# vendor documentation examples (e.g. AWS's own `AKIAIOSFODNN7EXAMPLE`) or
+# obviously-sequential fakes (`ghp_0123456789...`). They are false positives,
+# excluded here so the scan reflects real leaks only.
+version: 2
+
+secret:
+  ignored-paths:
+    - "tests/**"                              # all test fixtures / e2e mocks
+    - "src/mcp_gateway/redaction/eval.py"     # the labeled accuracy corpus
+  ignored-matches:
+    - name: AWS documentation example access key (test fixture)
+      match: AKIAIOSFODNN7EXAMPLE
+    - name: Sequential fake GitHub PAT (test fixture)
+      match: ghp_0123456789abcdefghijklmnopqrstuvwxyz
+    - name: Fake Slack bot token (test fixture)
+      match: xoxb-123456789012-abcdefGHIJKL

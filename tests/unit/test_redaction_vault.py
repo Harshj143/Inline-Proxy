@@ -1,6 +1,7 @@
 """Token vaults: determinism, reversibility, and at-rest encryption."""
 
 import base64
+import importlib.util
 import os
 
 import pytest
@@ -9,6 +10,14 @@ from mcp_gateway.redaction.vault import (
     EncryptedSqliteVault,
     InMemoryVault,
     load_kek_from_env,
+)
+
+# The encrypted vault needs the [vault] extra (cryptography). Its tests skip
+# when it's absent — same graceful-degradation contract as the Presidio tier.
+# CI installs the extra so these actually run.
+HAVE_CRYPTO = importlib.util.find_spec("cryptography") is not None
+requires_crypto = pytest.mark.skipif(
+    not HAVE_CRYPTO, reason="the [vault] extra (cryptography) is not installed"
 )
 
 
@@ -25,6 +34,7 @@ def test_in_memory_is_deterministic_and_reversible():
 
 
 # ------------------------------------------------------------- encrypted
+@requires_crypto
 def test_encrypted_vault_round_trips_and_persists(tmp_path):
     path = str(tmp_path / "vault.db")
     kek = b"K" * 32
@@ -40,6 +50,7 @@ def test_encrypted_vault_round_trips_and_persists(tmp_path):
     v2.close()
 
 
+@requires_crypto
 def test_encrypted_vault_value_not_stored_in_plaintext(tmp_path):
     path = tmp_path / "vault.db"
     v = EncryptedSqliteVault(str(path), b"K" * 32)
@@ -49,11 +60,13 @@ def test_encrypted_vault_value_not_stored_in_plaintext(tmp_path):
     assert b"secret@example.com" not in blob  # value is AES-GCM encrypted at rest
 
 
+@requires_crypto
 def test_encrypted_vault_rejects_short_kek(tmp_path):
     with pytest.raises(ValueError, match="at least 32 bytes"):
         EncryptedSqliteVault(str(tmp_path / "v.db"), b"tooshort")
 
 
+@requires_crypto
 def test_wrong_kek_cannot_read(tmp_path):
     path = str(tmp_path / "vault.db")
     v = EncryptedSqliteVault(path, b"A" * 32)

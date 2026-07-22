@@ -19,7 +19,10 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          # [vault] pulls cryptography so the encrypted-vault tests actually run.
+          # The heavier tiers ([presidio], [anomaly]) stay out — their tests
+          # skip when absent, keeping CI fast.
+          pip install -e ".[dev,vault]"
       - name: Lint
         run: ruff check src tests
       - name: Test
