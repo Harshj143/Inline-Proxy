@@ -15,7 +15,10 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from mcp_gateway.redaction.spec import RedactionSpec
 
 
 @dataclass(slots=True)
@@ -23,14 +26,15 @@ class PendingCall:
     """A forwarded tools/call awaiting its response, keyed by request id.
 
     `disposition` is how the response path must treat the result:
-    "none" (deliver), "quarantine" (withhold, substitute a notice), and
-    later "redact" (scrub before delivery).
+    "none" (deliver), "quarantine" (withhold, substitute a notice), or
+    "redact" (scrub before delivery using `redaction`).
     """
 
     tool: str
     action: str
     started: float  # perf_counter at forward time
     disposition: str = "none"
+    redaction: RedactionSpec | None = None
 
     def elapsed_ms(self) -> float:
         return (time.perf_counter() - self.started) * 1000
@@ -43,25 +47,46 @@ class Session:
     suspended: bool = False
     history: list[str] = field(default_factory=list)
     pending: dict[Any, PendingCall] = field(default_factory=dict)
+    # Taint state (sequence.SequencePolicy): set once an untrusted source runs.
+    tainted: bool = False
+    taint_origin: str | None = None
+    # Risk state (risk.RiskEngine): score accumulates; suspended flips at
+    # the threshold. Kept as plain fields so a Redis store can mirror them.
+    risk_score: int = 0
+    risk_events: list[dict] = field(default_factory=list)
 
     @classmethod
-    def new(cls) -> Session:
+    def new(cls, session_id: str | None = None) -> Session:
         return cls(
-            id=uuid.uuid4().hex[:8],
+            id=session_id or uuid.uuid4().hex[:8],
             started_at=datetime.now(UTC).isoformat(timespec="milliseconds"),
         )
 
     def record_call(self, tool: str) -> None:
         self.history.append(tool)
 
+    def mark_tainted(self, origin: str) -> bool:
+        """Mark the session tainted; return True only on the first taint."""
+        if self.tainted:
+            return False
+        self.tainted = True
+        self.taint_origin = origin
+        return True
+
     def track_pending(
-        self, request_id: Any, tool: str, action: str, disposition: str = "none"
+        self,
+        request_id: Any,
+        tool: str,
+        action: str,
+        disposition: str = "none",
+        redaction: RedactionSpec | None = None,
     ) -> None:
         # A client reusing an in-flight id is misbehaving; last write wins and
         # the earlier call simply loses response-path handling (safe direction:
         # nothing is released un-inspected, the entry is only bookkeeping).
         self.pending[request_id] = PendingCall(
-            tool=tool, action=action, started=time.perf_counter(), disposition=disposition
+            tool=tool, action=action, started=time.perf_counter(),
+            disposition=disposition, redaction=redaction,
         )
 
     def resolve_pending(self, request_id: Any) -> PendingCall | None:

@@ -38,10 +38,12 @@ from mcp_gateway.core.pipeline import (
     ConstraintsStage,
     PolicyStage,
     RequestPipeline,
+    build_action_handlers,
 )
 from mcp_gateway.core.session import Session
 from mcp_gateway.policy.engine import PolicyEngine
 from mcp_gateway.protocol.jsonrpc import JsonRpcMessage
+from mcp_gateway.redaction.service import RedactionService
 
 _EXPECT_FIELDS = {"outcome", "action", "stage", "reason_contains", "disposition", "rewritten"}
 
@@ -78,10 +80,14 @@ def run_policy_tests(
 ) -> list[GoldenResult]:
     engine = PolicyEngine.load(policy_paths)
     cases = load_tests_file(tests_path)
-    return [_run_case(engine, i, case) for i, case in enumerate(cases)]
+    # Goldens exercise the real redact behavior (a service-backed handler),
+    # not the fail-closed stub, so `expect: {action: redact, outcome: allow}`
+    # asserts what a redaction-enabled gateway will actually do.
+    handlers = build_action_handlers(RedactionService())
+    return [_run_case(engine, handlers, i, case) for i, case in enumerate(cases)]
 
 
-def _run_case(engine: PolicyEngine, index: int, case: Any) -> GoldenResult:
+def _run_case(engine: PolicyEngine, handlers, index: int, case: Any) -> GoldenResult:
     name = case.get("name", f"case[{index}]") if isinstance(case, dict) else f"case[{index}]"
     result = GoldenResult(name=name)
 
@@ -110,7 +116,9 @@ def _run_case(engine: PolicyEngine, index: int, case: Any) -> GoldenResult:
     )
     # The session gate is deliberately absent: goldens assert static policy,
     # not session state (risk/taint goldens arrive with Phase 3).
-    pipeline = RequestPipeline([PolicyStage(engine), ConstraintsStage(), ActionStage()])
+    pipeline = RequestPipeline([
+        PolicyStage(engine), ConstraintsStage(), ActionStage(handlers)
+    ])
     outcome = asyncio.run(pipeline.run(ctx))
 
     actual_outcome = "deny" if outcome.denied else "allow"

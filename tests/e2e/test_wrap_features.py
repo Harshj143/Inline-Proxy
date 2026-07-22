@@ -77,9 +77,10 @@ def test_rewrite_quarantine_and_filtering(tmp_path):
         # tools/list: only tools that can actually succeed are visible.
         resp = gw.call({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         names = {t["name"] for t in resp["result"]["tools"]}
-        assert names == {"search.docs", "db.execute_sql", "logs.tail"}
-        # hidden: crm.get_customer (redact→deny, no role), web.fetch/http.post
-        # (blocked until taint), admin.delete_user (approval→deny)
+        assert names == {"search.docs", "db.execute_sql", "logs.tail",
+                         "crm.get_customer", "web.fetch", "http.post"}
+        # web.fetch/http.post are statically 'allow' again (taint gates them at
+        # runtime); only admin.delete_user (approval→deny) is hidden.
 
         # rewrite: the mock server echoes nothing about sql, but the audit
         # trail proves what was forwarded.
@@ -105,10 +106,8 @@ def test_rewrite_quarantine_and_filtering(tmp_path):
         by_event.setdefault(ev["event"], []).append(ev)
 
     filtered = by_event["tools_list_filtered"][0]
-    assert filtered["total"] == 7 and filtered["shown"] == 3
-    assert set(filtered["hidden"]) == {
-        "crm.get_customer", "web.fetch", "http.post", "admin.delete_user",
-    }
+    assert filtered["total"] == 7 and filtered["shown"] == 6
+    assert set(filtered["hidden"]) == {"admin.delete_user"}
 
     rewritten = [ev for ev in by_event["tool_call_allowed"] if ev.get("rewrites")]
     assert rewritten[0]["tool"] == "db.execute_sql"

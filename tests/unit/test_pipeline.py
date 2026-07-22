@@ -104,7 +104,7 @@ def test_default_pipeline_order():
     # style choice — the assertion is the contract.
     pipeline = default_pipeline(make_engine())
     assert [s.name for s in pipeline.stages] == [
-        "session_gate", "policy", "constraints", "action",
+        "session_gate", "policy", "constraints", "sequence", "action",
     ]
 
 
@@ -171,3 +171,44 @@ def test_role_overlay_changes_pipeline_outcome():
         default_pipeline(engine).run(make_ctx(tool="crm.get", role="admin"))
     )
     assert not allowed.denied
+
+
+# ----------------------------------------------------- sequence/taint gate
+def _taint_engine():
+    return PolicyEngine.from_documents([({
+        "schema_version": 1, "default_action": "allow",
+        "tools": {"web.fetch": {"action": "allow"}, "http.post": {"action": "allow"}},
+        "taint_sources": ["web.fetch"], "taint_sinks": ["http.post"],
+    }, "taint")])
+
+
+def test_sequence_gate_blocks_sink_in_tainted_session():
+    engine = _taint_engine()
+    ctx = make_ctx(tool="http.post")
+    ctx.session.mark_tainted("web.fetch")
+    outcome = asyncio.run(default_pipeline(engine).run(ctx))
+    assert outcome.denied and outcome.stage == "sequence"
+    assert outcome.risk_event == "sequence_violation"
+
+
+def test_sequence_gate_allows_sink_in_clean_session():
+    engine = _taint_engine()
+    outcome = asyncio.run(default_pipeline(engine).run(make_ctx(tool="http.post")))
+    assert not outcome.denied
+
+
+def test_block_denial_carries_blocked_tool_risk_event():
+    engine = make_engine({"x": {"action": "block"}})
+    outcome = asyncio.run(default_pipeline(engine).run(make_ctx(tool="x")))
+    assert outcome.denied and outcome.risk_event == "blocked_tool"
+
+
+def test_constraint_denial_carries_constraint_risk_event():
+    engine = make_engine({"db.q": {
+        "action": "allow",
+        "constraints": [{"arg": "sql", "must_match": "^SELECT"}],
+    }})
+    outcome = asyncio.run(default_pipeline(engine).run(
+        make_ctx(tool="db.q", arguments={"sql": "DROP"})
+    ))
+    assert outcome.denied and outcome.risk_event == "constraint_violation"

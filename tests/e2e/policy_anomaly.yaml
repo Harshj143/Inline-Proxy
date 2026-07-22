@@ -1,0 +1,11 @@
+schema_version: 1
+name: e2e-anomaly
+default_action: block
+# No taint or sequence rules: both tools are statically allowed. The point is
+# that the behavioral monitor flags the read-then-exfil SHAPE even though no
+# static rule fires.
+tools:
+  crm.get_customer:
+    action: allow
+  http.post:
+    action: allow

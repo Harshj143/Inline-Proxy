@@ -21,6 +21,56 @@
       "type": "object",
       "description": "Tool name or glob pattern (fnmatch: * ? [seq]) → rule. Exact names beat globs; more-specific globs beat less-specific.",
       "additionalProperties": { "$ref": "#/$defs/rule" }
+    },
+    "taint_sources": {
+      "type": "array", "items": { "type": "string" },
+      "description": "Tools (glob ok) that ingest untrusted content; calling one taints the session."
+    },
+    "taint_sinks": {
+      "type": "array", "items": { "type": "string" },
+      "description": "Tools (glob ok) blocked once the session is tainted (outbound/mutating)."
+    },
+    "sequence_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["after", "forbid"],
+        "properties": {
+          "after": { "type": "string", "description": "once a tool matching this has run..." },
+          "forbid": { "type": "string", "description": "...a tool matching this is blocked for the session" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "weights": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" },
+          "description": "risk event name → points (overrides defaults)"
+        },
+        "elevated_at": { "type": "integer", "default": 50 },
+        "suspend_at": { "type": "integer", "default": 80 }
+      }
+    },
+    "on_failure": {
+      "description": "What happens on UNEXPECTED runtime errors (not policy denials or config errors, which always enforce). Default fail-closed. A global mode, or per-category. AT YOUR OWN RISK.",
+      "oneOf": [
+        { "enum": ["closed", "open"], "description": "global posture" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "default": { "enum": ["closed", "open"], "default": "closed" },
+            "pipeline": { "enum": ["closed", "open"], "description": "a request-stage plugin crashed" },
+            "redaction": { "enum": ["closed", "open"], "description": "a detector crashed / payload over budget" },
+            "approval": { "enum": ["closed", "open"], "description": "the approver was unreachable / timed out" }
+          }
+        }
+      ]
     }
   },
   "$defs": {
@@ -49,6 +99,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/rewrite" }
         },
+        "redaction": { "$ref": "#/$defs/redaction" },
         "roles": {
           "type": "object",
           "description": "Per-role overlay: replaces only the fields it names for callers with that role.",
@@ -64,8 +115,38 @@
         "reason": { "type": "string" },
         "then": { "$ref": "#/$defs/action" },
         "constraints": { "type": "array", "items": { "$ref": "#/$defs/constraint" } },
-        "rewrites": { "type": "array", "items": { "$ref": "#/$defs/rewrite" } }
+        "rewrites": { "type": "array", "items": { "$ref": "#/$defs/rewrite" } },
+        "redaction": { "$ref": "#/$defs/redaction" }
       }
+    },
+    "redaction": {
+      "description": "Redaction config for the redact action: a profile name, or a mapping refining one.",
+      "oneOf": [
+        { "type": "string", "description": "profile name (secrets-only | standard | strict)" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "profile": { "type": "string", "default": "standard" },
+            "exclude_keys": {
+              "type": "array", "items": { "type": "string" },
+              "description": "never redact values under keys with these names"
+            },
+            "allowlist": {
+              "type": "array", "items": { "type": "string" },
+              "description": "literal strings never treated as sensitive"
+            },
+            "denylist": {
+              "type": "array", "items": { "type": "string" },
+              "description": "literal strings always redacted"
+            },
+            "context_words": {
+              "type": "array", "items": { "type": "string" },
+              "description": "words that, appearing just before a detection, raise its confidence over the threshold"
+            }
+          }
+        }
+      ]
     },
     "constraint": {
       "type": "object",

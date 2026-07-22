@@ -9,7 +9,19 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–1 complete (2026-07-19). Next: Phase 2 — Redaction subsystem.**
+**➡️ You are here: Phases 0–3 COMPLETE + configurable failure posture (2026-07-19). Next: Phase 4 — Console v2.**
+
+**Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
+Customer-owned risk choice via `on_failure` in the policy document (global
+`open`/`closed`, or per-category `pipeline`/`redaction`/`approval`; default
+closed). Governs UNEXPECTED runtime errors ONLY — never policy denials, config
+errors, or unmatched tools (those always enforce). `core/failure.py`
+`FailurePosture`; pipeline tags stage crashes `internal_error`; gateway
+forwards-on-crash / releases-unscanned only when opted in, and every fail-open
+event is loudly audited (`fail_open_enabled` at startup + stderr banner,
+`stage_error_fail_open`, `redaction_error_fail_open`); approval broker gains
+`fail_open` (unreachable approver approves). Set via a tiny layered override
+pack. 14 tests (`test_failure.py`, `test_gateway_failure.py`).
 
 ---
 
@@ -56,33 +68,97 @@ reappears for `--role admin`). 52 tests green.
 
 ## Phase 2 — Redaction subsystem (size: L — the flagship)
 
-- [ ] `redaction/engine.py` — detector pipeline, span merge by confidence, operator application, report
-- [ ] `detectors/regex_pii.py` — email/phone/SSN/IP/card **with validators** (Luhn, SSN area rules, octet ranges)
-- [ ] `detectors/secrets.py` — AWS keys, GitHub PATs, Slack tokens, JWTs, private-key blocks, high-entropy strings
-- [ ] `detectors/presidio.py` — optional extra; pool-executor execution; size cap + chunking + latency budget
-- [ ] `detectors/custom.py` — company recognizers from config (employee IDs, hostnames, codenames)
-- [ ] `operators/` — mask, partial-mask, deterministic HMAC hash, tokenize (vault + envelope encryption), drop
-- [ ] `context.py` — allowlists/denylists, context words; `structured.py` — JSON-path targeting, key-name hints
-- [ ] `profiles.py` — secrets-only / standard / strict; policy rules reference profiles
-- [ ] Fail-closed wiring: detector error or over-budget on response path → quarantine result
-- [ ] `tests/redaction_corpus/` — labeled corpus + **precision/recall eval harness** per entity per detector
+Split into 2a (standalone engine, DONE), 2b (policy + gateway wiring), 2c
+(Presidio tier, tokenization vault, expanded corpus).
 
-**Exit criteria:** corpus eval reports published in CI; a GitHub PAT planted in
-a mock tool result is caught end-to-end; prototype `redact.py` behavior is a
-strict subset of the new engine.
+### Phase 2a — Engine core ✅ DONE (2026-07-19)
+
+- [x] `redaction/engine.py` — detector pipeline, span merge by confidence (`spans.resolve_overlaps`), right-to-left operator application, report
+- [x] `detectors/regex_pii.py` — email/phone/SSN/IP/card **with validators** (`validators.py`: Luhn, SSN area/group/serial rules, IPv4 octet ranges). Fixed a real bug: card regex was capturing a trailing separator
+- [x] `detectors/secrets.py` — AWS keys, GitHub PATs (ghp_/github_pat_), Slack tokens, JWTs, private-key blocks, high-entropy heuristic (Shannon, low-confidence, de-duped against provider hits, disable-able)
+- [x] `operators/` — mask, partial-mask (keep last 4, falls back to full mask for short values), deterministic keyed HMAC hash (correlation without exposure), drop
+- [x] `entities.py` (registry, PII/SECRET categories), `report.py` (**counts only, never raw values** — audit must not become a PII sink)
+- [x] `profiles.py` — secrets-only / standard / strict (strict auto-uses Presidio if present); `build_engine(profile)`
+- [x] `tests/redaction_corpus/` — labeled corpus (positives + look-alike negatives) + **precision/recall eval harness** with CI thresholds; currently **precision 1.000 / recall 1.000**
+- [x] 34 redaction tests; 86 total green; ruff clean
+
+Deferred to 2b/2c (not cut — sequenced): `detectors/presidio.py`,
+`detectors/custom.py`, tokenize operator + vault + envelope encryption,
+`context.py` (denylists/context words), `structured.py` (JSON-path/key-name
+targeting), detector `DetectionContext.allowlist` is in but the richer context
+signals are 2b.
+
+### Phase 2b — Wire redaction into policy + gateway ✅ DONE (2026-07-19)
+
+- [x] `redact` action executable (`RedactHandler(service)`, `terminal_deny` False when a service is present): scrubs ARGUMENTS outbound (DLP) + marks disposition "redact". The no-service stub still fails closed
+- [x] Gateway response path (`_deliver_redacted`): result run through the engine before delivery; `tool_result_redacted` audit with counts-only
+- [x] Fail-closed wiring: detector error / missing service on the response path → withhold the result (`tool_result_redaction_failed`, never release unscanned); error results delivered as-is
+- [x] Policy `redaction:` field (string or object form) selects profile + targeting per tool/role; loader validates profile names against the registry; `RedactionSpec` compiled onto the Decision; JSON Schema updated
+- [x] `redaction/structured.py` — token-based key-name hints (catches `password`/`aws_secret_access_key`, spares `token_count`/`authorized_users`) + `exclude_keys`; `redaction/spec.py`; denylist/allowlist literals via `DetectionContext`
+- [x] `mcp-gateway redact` CLI (text + `--json` structural + `--eval` corpus metrics); corpus/eval moved into the package (`redaction/eval.py`) so it ships
+- [x] Design: threaded redaction explicitly (pipeline `build_action_handlers`, per-gateway visibility `denying` set) instead of mutating the global registry — no cross-test/cross-gateway leakage
+- [x] e2e: planted GitHub PAT + AWS key + PII in a real tool result scrubbed end-to-end (`test_wrap_redaction.py`), audit proven to hold no raw values; mock-crm redaction goldens flipped fail-closed → real (12/12); 106 tests green
+
+Deferred to 2c (not cut): context-word confidence boosting (natural with
+Presidio); over-budget size caps (arrive with the Presidio latency budget).
+
+### Phase 2c-i — Tokenization vault + custom recognizers + budget ✅ DONE (2026-07-19)
+
+- [x] `redaction/vault.py` — `TokenVault` interface; `InMemoryVault` (stdlib, keyed BLAKE2, non-persistent); `EncryptedSqliteVault` (envelope encryption: KEK wraps a per-vault DEK, values AES-GCM at rest, deterministic HMAC token ids, persistent across restarts). `cryptography` as `[vault]` extra
+- [x] `operators/tokenize.py` — reversible redaction via a vault (deterministic tokens → correlation without exposure); registered operator
+- [x] `redaction/profiles.py` — `reversible` profile (PII tokenized, secrets still one-way hashed); `build_engine` gains operator-override + extra-detector params; `RedactionService` owns one shared vault + exposes `detokenize`
+- [x] `detectors/custom.py` — config-driven company recognizers (entity + regex + confidence), auto-register CUSTOM entities; wired via service + `--recognizers` file
+- [x] Engine size budget (`max_bytes` → `RedactionBudgetExceeded`); gateway already catches → withholds (fail closed)
+- [x] `mcp-gateway detokenize --vault … TOKEN` (audited, principal-attributed); `wrap --vault/--recognizers`; verified cross-process reverse through the encrypted vault
+- [x] 17 new tests (vault round-trip/persistence/wrong-KEK/at-rest-encryption, tokenize, custom, budget); 123 total green, ruff clean
+
+### Phase 2c-ii — Presidio tier + span-level eval ✅ DONE (2026-07-19)
+
+- [x] `detectors/presidio.py` — optional `[presidio]` extra; NER for PERSON/LOCATION/NRP only (regex tier owns the structured entities); analyzer lazy-loaded + process-cached (cheap construction); thread-locked (spaCy not thread-safe); whitespace chunking for large text; **graceful degrade** when extra/model absent (auto-joins `strict`, verified both ways); Presidio types mapped to our entity names, never leaked
+- [x] Gateway offloads redaction to a worker thread (`asyncio.to_thread`) so NER never stalls the event loop
+- [x] Context-word confidence boosting: `DetectionContext.context_words` + engine boost before threshold; wired through `RedactionSpec`/loader/schema (`redaction.context_words`)
+- [x] `engine.detect_spans()` exposes positioned resolved spans; span-labeled corpus + `evaluate_spans` (overlap match, distinguishes PERSON from LOCATION); CI publishes a redaction-metrics artifact
+- [x] 12 new tests (Presidio present+absent, context boost, span eval); 135 total green, ruff clean. Span eval strict = 1.000/1.000 incl. PERSON/LOCATION with Presidio installed
+
+**Phase 2 COMPLETE.** All exit criteria met: corpus eval in CI (2a),
+planted-PAT caught end-to-end (2b), prototype `redact.py` a strict subset
+(regex+validators supersede it). The redaction subsystem now spans validated
+regex PII, secrets, optional NER, custom recognizers, five operators
+(mask/partial/hash/tokenize/drop), an encrypted reversible vault, profiles,
+structured + context targeting, and span-level accuracy measurement.
 
 ## Phase 3 — Session controls + approvals + anomaly (size: M)
 
-- [ ] `state/memory.py` store: session registry, history, taint, risk (interfaces ready for Redis)
-- [ ] Sequence/taint gate stage; risk scoring with thresholds + auto-suspend; suspension broadcast via store
-- [ ] Pipeline ordering per ARCHITECTURE §2: constraints → sequence/taint → **approval last**; taint marking only after gates pass
-- [ ] `approvals/broker.py` (deadline, fail-closed) + console channel (HTTP callback)
-- [ ] `anomaly/` — port heuristic + Claude backends; debounced (not every call); verdict → risk points
-- [ ] Quarantine response path end-to-end
+### Phase 3a — Session state + risk + taint/sequence gate ✅ DONE (2026-07-19)
 
-**Exit criteria:** prototype `attack_scenario.py` and `feature_demo.py`
-scenarios pass against the new gateway (ported as e2e tests); approval asked
-only for calls that pass all other gates.
+- [x] `state/` — `SessionStore` interface + `MemorySessionStore` (Redis-ready seam); `Session` extended with taint + risk fields
+- [x] `risk/scoring.py` — `RiskEngine`, weighted events, NORMAL/ELEVATED/SUSPENDED thresholds, auto-suspend on transition; policy-configurable (`risk:` block)
+- [x] `sequence/policy.py` — taint sources/sinks + sequence rules (glob-aware); `SequenceGateStage` between constraints and action
+- [x] Pipeline order per ARCHITECTURE §2: session_gate → policy → constraints → **sequence** → action; taint marked only AFTER a call passes every gate; `StageOutcome.risk_event` scores denials
+- [x] Gateway: builds risk+sequence from policy, records risk on denials (session_gate denial adds none — no double-punishment), `session_tainted`/`session_suspended` audit, heavy-redaction scoring on the response path
+- [x] Policy loader/merge/schema: `taint_sources`/`taint_sinks` (union across layers), `sequence_rules` (concat), `risk` (last-wins); mock-crm.yaml restored web.fetch/http.post to allow (now safe under taint)
+- [x] e2e `test_wrap_attack.py`: poisoned-fetch → taint → PII read redacted → exfil POST **blocked** (taint + sequence); clean session still POSTs; repeated violations auto-suspend. 159 tests green, ruff clean
+
+### Phase 3b-i — Approvals broker ✅ DONE (2026-07-19)
+
+- [x] `approvals/` — `ApprovalBroker` (deadline + fail-closed wrapper), channels `DenyChannel`/`AllowChannel`/`HttpChannel` (stdlib urllib in a worker thread; POSTs to `{url}/api/approvals`, the console contract for Phase 4), `build_broker(mode, url)`
+- [x] `require_approval` executable (`RequireApprovalHandler(broker)`): on approve → dispatches the `then` action's REAL handler (redact scrubs, etc.), on deny → blocks + approval_denied risk; recursion-guarded; fail-closed with no broker
+- [x] Approval is the last action-stage step (only reached after session/policy/constraints/sequence pass); `can_approve` capability → deny-mode tools stay hidden, allow/http tools become visible
+- [x] Visibility refactor: `RequestPipeline.denying_actions()` derives from the ACTUAL wired handlers (no ad-hoc registry subtraction); `approval_requested` audit event; CLI `--approvals deny|allow|http` + `--approvals-url`
+- [x] e2e `test_wrap_approval.py`: denied fail-closed (hidden + refused) and approved (visible + reaches server via then:allow); 172 tests green, ruff clean
+
+### Phase 3b-ii — Anomaly detector ✅ DONE (2026-07-19)
+
+- [x] `anomaly/` — `AnomalyBackend` interface + `SessionTrace`/`Verdict`; `HeuristicBackend` (read-then-exfil, recon sprawl); `ClaudeBackend` (Haiku, `output_config` JSON schema, `[anomaly]` extra, graceful degrade → `available` False without SDK/key); `AnomalyMonitor` (debounced sampling, `force=True` on blocks) + `build_monitor` (claude → heuristic fallback with stderr note)
+- [x] Gateway `_run_anomaly` after every call (force on denials); verdict → `anomaly_{low,medium,high}` risk points → can auto-suspend; runs in a worker thread (Claude); `anomaly_detected` audit event with rationale + backend
+- [x] CLI `--anomaly off|heuristic|claude` + `--anomaly-debounce N`; `anomaly_backend` on gateway_start
+- [x] e2e `test_wrap_anomaly.py`: statically-allowed read-then-exfil flagged (medium) and scored into risk though NO static rule fired; benign session not flagged. 201 tests green, ruff clean
+
+**Phase 3 COMPLETE.** All exit criteria met: attack_scenario passes (3a),
+approvals denied-then-approved (3b-i), anomaly flags read-then-exfil (3b-ii),
+approval asked only after every other gate passes. The gateway is now adaptive:
+static policy + argument constraints + taint/sequence + risk auto-suspend +
+human approvals + behavioral monitoring, all feeding one risk score.
 
 ## Phase 4 — Console v2 (size: M)
 

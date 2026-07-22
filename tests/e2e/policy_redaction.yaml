@@ -1,0 +1,8 @@
+schema_version: 1
+name: e2e-redaction
+default_action: block
+tools:
+  vault.read:
+    action: redact
+    redaction: standard
+    reason: records contain PII and credentials; scrub before the model sees them

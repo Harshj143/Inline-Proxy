@@ -24,3 +24,12 @@ jobs:
         run: ruff check src tests
       - name: Test
         run: pytest
+      - name: Redaction accuracy metrics
+        run: |
+          python -m mcp_gateway redact --eval --profile standard | tee redaction-metrics.txt
+      - name: Upload redaction metrics
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: redaction-metrics
+          path: redaction-metrics.txt

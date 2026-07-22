@@ -36,7 +36,12 @@ def register_action(handler: ActionHandler) -> None:
 
 
 def denying_actions() -> frozenset[str]:
-    """Actions that can only refuse a call in the current build."""
+    """Actions that can only refuse a call with the default (stub) registry.
+
+    A gateway that enables a service-backed redact handler computes its own
+    narrower set (see gateway tools/list filtering); this global default is
+    the fail-closed baseline.
+    """
     return frozenset(name for name, h in ACTIONS.items() if h.terminal_deny)
 
 
