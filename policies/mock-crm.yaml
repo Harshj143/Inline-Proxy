@@ -3,22 +3,27 @@
 # The prototype's policies.json converted to the v1 pack format — the
 # reference policy for the mock CRM server (demo/mock_server.py).
 #
-# Deliberately deferred from the prototype original (feature lands, rule
-# returns — until then the engine fails CLOSED wherever these would apply):
-#   redact_entities                → redaction profiles, Phase 2
-#   taint_sources / taint_sinks    → session taint tracking, Phase 3
-#   sequence_rules                 → sequence-aware policies, Phase 3
-# Because web.fetch/http.post were only safe under taint tracking, they are
-# BLOCKED here rather than allowed-without-the-guard (fail closed; Phase 3
-# restores the conditional allow).
+# Full parity with the prototype policy as of Phase 3a: web.fetch/http.post are
+# allowed again, now safe because taint tracking + a sequence rule block the
+# exfiltration path they would otherwise open.
 
 schema_version: 1
 name: mock-crm
 default_action: block
 
+# Session-state controls (Phase 3a). web.fetch pulls in untrusted content, so
+# it taints the session; once tainted, outbound/mutating tools are blocked.
+taint_sources: [web.fetch]
+taint_sinks: [http.post, db.execute_sql]
+sequence_rules:
+  - after: crm.get_customer
+    forbid: http.post
+    reason: no outbound POST after reading customer PII in the same session (exfiltration guard)
+
 tools:
   crm.get_customer:
-    action: redact           # fails closed until Phase 2's redaction engine
+    action: redact                 # executable as of Phase 2b
+    redaction: standard            # scrub validated PII + secrets before the LLM
     reason: customer records contain PII; strip before the LLM sees them
     roles:
       admin:
@@ -26,6 +31,7 @@ tools:
         reason: admins are cleared to see raw customer PII
       analyst:
         action: redact
+        redaction: standard
         reason: analysts see masked PII only
 
   search.docs:
@@ -33,12 +39,12 @@ tools:
     reason: public documentation search, no sensitive data
 
   web.fetch:
-    action: block
-    reason: untrusted web content requires taint tracking (Phase 3); blocked until then
+    action: allow
+    reason: public web fetch; taints the session (untrusted content)
 
   http.post:
-    action: block
-    reason: outbound POST requires taint tracking to be safe (Phase 3); blocked until then
+    action: allow
+    reason: outbound HTTP; allowed only while the session is clean (untainted)
 
   db.execute_sql:
     action: rewrite

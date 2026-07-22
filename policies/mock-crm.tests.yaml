@@ -51,14 +51,13 @@ tests:
       outcome: deny
       stage: constraints
 
-  - name: customer record without role fails closed until redaction lands
+  - name: customer record redacted (default role)
     tool: crm.get_customer
     arguments: { id: "8842" }
     expect:
-      outcome: deny
+      outcome: allow
       action: redact
-      stage: action
-      reason_contains: failing closed
+      disposition: redact
 
   - name: admin role overlay sees raw customer data
     tool: crm.get_customer
@@ -69,13 +68,14 @@ tests:
       action: allow
       reason_contains: cleared to see raw
 
-  - name: analyst role overlay still fails closed until redaction lands
+  - name: analyst role overlay gets redaction
     tool: crm.get_customer
     role: analyst
     arguments: { id: "8842" }
     expect:
-      outcome: deny
+      outcome: allow
       action: redact
+      disposition: redact
 
   - name: log tail is quarantined, not blocked
     tool: logs.tail
@@ -93,10 +93,20 @@ tests:
       action: require_approval
       reason_contains: approval broker
 
-  - name: web fetch blocked until taint tracking lands
+  # NOTE: taint/sequence are SESSION-state controls; the golden harness tests
+  # static policy only. web.fetch/http.post are statically 'allow' here — the
+  # taint gate that blocks http.post in a tainted session is covered by the
+  # attack-scenario e2e (tests/e2e/test_wrap_attack.py), not by goldens.
+  - name: web fetch is allowed (taints the session at runtime)
     tool: web.fetch
     arguments: { url: "https://example.com" }
     expect:
-      outcome: deny
-      action: block
-      reason_contains: taint
+      outcome: allow
+      action: allow
+
+  - name: outbound POST is statically allowed (blocked at runtime if tainted)
+    tool: http.post
+    arguments: { url: "https://example.com", body: "{}" }
+    expect:
+      outcome: allow
+      action: allow

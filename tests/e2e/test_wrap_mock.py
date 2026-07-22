@@ -129,12 +129,14 @@ def test_full_session(gw, tmp_path):
     assert resp["error"]["code"] == -32001
     assert "default policy" in resp["error"]["message"]
 
-    # 5. a rule with a not-yet-implemented action (redact) fails CLOSED —
-    # the gateway must never downgrade redact to allow and leak raw PII.
+    # 5. a redact rule now SCRUBS the result: the call succeeds but the PII in
+    # the customer record never reaches the client (Phase 2b, redact live).
     resp = gw.call(tool_call(6, "crm.get_customer", {"id": "8842"}))
-    assert resp["error"]["code"] == -32001
-    assert "failing closed" in resp["error"]["message"]
-    assert "ada.verne@example.com" not in json.dumps(resp)
+    assert "result" in resp
+    blob = json.dumps(resp)
+    assert "ada.verne@example.com" not in blob     # email scrubbed
+    assert "544-21-1290" not in blob               # ssn scrubbed
+    assert "REDACTED" in blob                       # replaced with typed markers
 
     # Shut down and inspect the audit trail.
     gw.close()
@@ -145,7 +147,7 @@ def test_full_session(gw, tmp_path):
 
     assert set(by_event) >= {
         "gateway_start", "passthrough_request", "tool_call_allowed",
-        "tool_result", "tool_call_blocked", "gateway_stop",
+        "tool_result", "tool_result_redacted", "tool_call_blocked", "gateway_stop",
     }
 
     # Every event is schema v1 and carries the session id.
@@ -153,15 +155,19 @@ def test_full_session(gw, tmp_path):
     assert len(session_ids) == 1 and None not in session_ids
     assert all(ev["schema_version"] == 1 for ev in audit)
 
-    allowed = by_event["tool_call_allowed"]
-    assert [ev["tool"] for ev in allowed] == ["search.docs"]
+    allowed_tools = [ev["tool"] for ev in by_event["tool_call_allowed"]]
+    assert allowed_tools == ["search.docs", "crm.get_customer"]
     # Rule attribution names the policy layer that decided (layer:pattern).
-    assert allowed[0]["rule"] == "e2e-phase0:search.docs"
+    assert by_event["tool_call_allowed"][0]["rule"] == "e2e-phase0:search.docs"
+
+    # The redaction event records counts, never the values.
+    redacted_ev = by_event["tool_result_redacted"][0]
+    assert redacted_ev["tool"] == "crm.get_customer"
+    assert redacted_ev["redactions"]["total"] >= 2
+    assert "544-21-1290" not in json.dumps(redacted_ev)
 
     blocked_tools = [ev["tool"] for ev in by_event["tool_call_blocked"]]
-    assert blocked_tools == [
-        "db.execute_sql", "filesystem.delete_everything", "crm.get_customer",
-    ]
+    assert blocked_tools == ["db.execute_sql", "filesystem.delete_everything"]
 
     result_ev = by_event["tool_result"][0]
     assert result_ev["tool"] == "search.docs"

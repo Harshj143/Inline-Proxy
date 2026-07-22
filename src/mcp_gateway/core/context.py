@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from mcp_gateway.core.session import Session
     from mcp_gateway.protocol.jsonrpc import JsonRpcMessage
+    from mcp_gateway.redaction.spec import RedactionSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,7 @@ class Decision:
     role: str | None = None
     constraints: list[Any] = field(default_factory=list)
     rewrites: list[dict[str, Any]] = field(default_factory=list)
+    redaction: RedactionSpec | None = None  # set when action is redact
     then_action: str = "allow"
 
 
@@ -62,13 +64,18 @@ class CallContext:
     arguments: dict[str, Any]
     principal: Principal
     decision: Decision | None = None
-    # Set by the action stage when rewrites changed the arguments; the
-    # gateway forwards these, never the originals, when present.
+    # Set by the action stage when rewrites/redaction changed the arguments;
+    # the gateway forwards these, never the originals, when present.
     effective_arguments: dict[str, Any] | None = None
     argument_changes: list[dict[str, Any]] = field(default_factory=list)
-    # How the response must be handled: "none" | "quarantine" (| "redact",
-    # once the redaction engine lands in Phase 2).
+    # Redaction report summary for scrubbed arguments (outbound DLP), if any.
+    argument_redactions: dict[str, Any] | None = None
+    # How the response must be handled: "none" | "quarantine" | "redact".
     disposition: str = "none"
+    # The spec to apply to the response when disposition == "redact".
+    redaction_spec: RedactionSpec | None = None
+    # The approval resolution, if a require_approval rule asked a human.
+    approval: Any = None
     # Per-stage wall-clock cost in milliseconds, keyed by stage name.
     timings_ms: dict[str, float] = field(default_factory=dict)
     started: float = field(default_factory=time.perf_counter)

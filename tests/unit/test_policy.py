@@ -31,7 +31,7 @@ def test_wrong_schema_version_rejected():
 
 def test_unknown_top_level_field_rejected():
     with pytest.raises(PolicyError, match="unknown top-level"):
-        parse_document({"schema_version": 1, "taint_sources": []}, source="test")
+        parse_document({"schema_version": 1, "not_a_real_field": []}, source="test")
 
 
 def test_invalid_action_is_load_time_error():
@@ -194,6 +194,45 @@ def test_visibility_tracks_denying_actions():
     assert not eng.is_visible("unknown.tool")     # default block
     assert not eng.is_visible("vip")
     assert eng.is_visible("vip", role="admin")    # per-role visibility
+
+
+# ---------------------------------------------------------------- redaction
+def test_redaction_field_compiles_to_spec():
+    eng = engine(doc({"crm.get": {"action": "redact", "redaction": "strict"}}))
+    decision = eng.evaluate("crm.get", {})
+    assert decision.action == "redact"
+    assert decision.redaction is not None
+    assert decision.redaction.profile == "strict"
+
+
+def test_redaction_defaults_to_standard_for_redact_action():
+    eng = engine(doc({"crm.get": {"action": "redact"}}))
+    assert eng.evaluate("crm.get", {}).redaction.profile == "standard"
+
+
+def test_redaction_object_form_with_targeting():
+    eng = engine(doc({"crm.get": {
+        "action": "redact",
+        "redaction": {"profile": "standard", "exclude_keys": ["id"],
+                      "denylist": ["Bluebird"]},
+    }}))
+    spec = eng.evaluate("crm.get", {}).redaction
+    assert spec.exclude_keys == frozenset({"id"})
+    assert spec.denylist == frozenset({"Bluebird"})
+
+
+def test_unknown_profile_rejected_at_load():
+    with pytest.raises(PolicyError, match="unknown redaction profile"):
+        engine(doc({"crm.get": {"action": "redact", "redaction": "ultra"}}))
+
+
+def test_role_overlay_can_change_redaction_profile():
+    eng = engine(doc({"crm.get": {
+        "action": "redact", "redaction": "secrets-only",
+        "roles": {"analyst": {"redaction": "strict"}},
+    }}))
+    assert eng.evaluate("crm.get", {}).redaction.profile == "secrets-only"
+    assert eng.evaluate("crm.get", {}, role="analyst").redaction.profile == "strict"
 
 
 # --------------------------------------------------------------- description

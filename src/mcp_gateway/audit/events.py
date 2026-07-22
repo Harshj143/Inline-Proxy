@@ -30,12 +30,30 @@ UPSTREAM_REQUEST = "upstream_request"          # server-initiated request -> cli
 TOOL_CALL_ALLOWED = "tool_call_allowed"
 TOOL_CALL_BLOCKED = "tool_call_blocked"
 TOOL_CALL_DENIED_SESSION_SUSPENDED = "tool_call_denied_session_suspended"
+
+# Session-state controls
+SESSION_TAINTED = "session_tainted"
+SESSION_SUSPENDED = "session_suspended"
+ANOMALY_DETECTED = "anomaly_detected"
+
+# Human-in-the-loop
+APPROVAL_REQUESTED = "approval_requested"
+
+# Failure posture (fail-open events — deliberately distinct and loud)
+FAIL_OPEN_ENABLED = "fail_open_enabled"            # at startup, if any category open
+STAGE_ERROR_FAIL_OPEN = "stage_error_fail_open"    # a pipeline error was let through
+REDACTION_ERROR_FAIL_OPEN = "redaction_error_fail_open"  # unscanned result released
 TOOL_RESULT = "tool_result"
 TOOL_RESULT_QUARANTINED = "tool_result_quarantined"
+TOOL_RESULT_REDACTED = "tool_result_redacted"
+TOOL_RESULT_REDACTION_FAILED = "tool_result_redaction_failed"
 TOOLS_LIST_FILTERED = "tools_list_filtered"
 
 # Transport health
 TRANSPORT_OVERRUN = "transport_line_overrun"
+
+# Vault
+DETOKENIZE = "detokenize"
 
 
 def make_event(event: str, **fields: Any) -> dict[str, Any]:
