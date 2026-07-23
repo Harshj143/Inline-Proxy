@@ -225,8 +225,8 @@ Split into 5a–5d; work strictly in order, finish + verify each before the next
 
 ### Phase 5c — Redis / Postgres state (honor the SessionStore seam)
 
-- [ ] `state/redis.py` (SessionStore over Redis — shared taint/risk across replicas) + `state/postgres.py` (audit index store); config switches memory/sqlite ↔ redis/postgres, deps in `[redis]`/`[postgres]` extras
-- [ ] Tests: fakeredis (or skip-guarded) — two gateways sharing one store see each other's taint/suspension; NO live redis/postgres in the sandbox
+- [x] **5c-i Redis session store** ✅ (2026-07-23): `Session.to_dict/from_dict` (durable state; `pending` excluded — belongs to the forwarding replica); `SessionStore.save()` (no-op default; the gateway calls it after each message); `state/redis.py` `RedisSessionStore` (sync redis client, `[redis]` extra, TTL, fail-closed on corrupt blob); gateway gains a `session_id` param so its id == the client's `Mcp-Session-Id` (also fixes audit correlation) and can bind an existing id to resume shared state; `central/config.py` `backend: redis` (+ `state.url`) wires ONE shared store into every session's gateway. Tests (fakeredis): dict round-trip, two replicas share taint/suspension/risk (store-level + through the real gateway), corrupt-blob/TTL/unknown-id. `fakeredis` in the `[dev]` extra.
+- [ ] **5c-ii Postgres audit-index store**: `state/postgres.py` mirroring `audit/index.py`'s query surface over Postgres, `[postgres]` extra; skip-guarded tests (no live PG in sandbox)
 
 ### Phase 5d — Dockerfile + compose + load test
 

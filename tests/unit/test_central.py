@@ -81,8 +81,10 @@ def test_json_config(tmp_path):
 
 @pytest.mark.parametrize("body, match", [
     ("upstreams: []", "non-empty list"),
+    ("state:\n  backend: elasticsearch\nupstreams:\n  - {name: a, command: [x], policy: [p]}",
+     "not supported"),
     ("state:\n  backend: redis\nupstreams:\n  - {name: a, command: [x], policy: [p]}",
-     "not supported yet"),
+     "requires state.url"),
     ("upstreams:\n  - {command: [x], policy: [p]}", "'name' is required"),
     ("upstreams:\n  - {name: a, policy: [p]}", "'command'"),
     ("upstreams:\n  - {name: a, command: [x]}", "'policy'"),

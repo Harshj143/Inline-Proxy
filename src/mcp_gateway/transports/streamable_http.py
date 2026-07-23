@@ -211,11 +211,14 @@ def build_session_parts(
     redaction=None,
     broker=None,
     anomaly=None,
+    store=None,
     annotate: dict[str, Any] | None = None,
 ) -> SessionParts:
     """A default `SessionParts` builder: each session shares the policy engine,
-    redaction service, broker, and spool, but gets its own gateway + recorder +
-    upstream. Kept dependency-light so the FastAPI layer only wires HTTP."""
+    redaction service, broker, spool, and (optionally) a shared session store,
+    but gets its own gateway + recorder + upstream. The gateway is bound to the
+    session id so its audit events carry the client's `Mcp-Session-Id`, and a
+    shared store (Redis) lets replicas resume the same session state."""
     from mcp_gateway.core.context import Principal
     from mcp_gateway.core.pipeline import default_pipeline
 
@@ -230,6 +233,8 @@ def build_session_parts(
             policy=engine,
             redaction=redaction,
             anomaly=anomaly,
+            store=store,
+            session_id=session_id,
         )
         if annotate:
             gateway.annotate(**annotate)

@@ -34,9 +34,10 @@ from typing import Any
 
 from mcp_gateway.core.errors import GatewayError
 
-# State backends implemented so far. redis/postgres land in Phase 5c; naming one
-# here now is a clear "not yet" rather than a confusing silent fallback.
-_SUPPORTED_STATE = {"memory"}
+# State backends implemented so far. `memory` = per-replica; `redis` = shared
+# session state (taint/risk/suspension) across replicas (Phase 5c). Postgres is
+# an audit-index backend, configured separately, not a session store.
+_SUPPORTED_STATE = {"memory", "redis"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,7 @@ class GatewayConfig:
     upstreams: list[UpstreamConfig]
     spool_path: str = "audit.log"
     state_backend: str = "memory"
+    state_url: str | None = None  # e.g. redis://host:6379/0 when backend == redis
     names: frozenset[str] = field(default_factory=frozenset)
 
 
@@ -101,17 +103,23 @@ def load_gateway_config(path: str | Path) -> GatewayConfig:
     spool_path = audit.get("spool", "audit.log") if isinstance(audit, dict) else "audit.log"
 
     state = document.get("state") or {}
-    backend = state.get("backend", "memory") if isinstance(state, dict) else "memory"
+    if not isinstance(state, dict):
+        state = {}
+    backend = state.get("backend", "memory")
     if backend not in _SUPPORTED_STATE:
         raise GatewayError(
-            f"{path}: state.backend {backend!r} not supported yet "
-            f"(available: {sorted(_SUPPORTED_STATE)}; redis/postgres arrive in Phase 5c)"
+            f"{path}: state.backend {backend!r} not supported "
+            f"(available: {sorted(_SUPPORTED_STATE)})"
         )
+    state_url = state.get("url")
+    if backend == "redis" and not state_url:
+        raise GatewayError(f"{path}: state.backend 'redis' requires state.url")
 
     return GatewayConfig(
         upstreams=upstreams,
         spool_path=str(spool_path),
         state_backend=backend,
+        state_url=state_url,
         names=frozenset(seen),
     )
 
@@ -143,6 +151,10 @@ def build_central_app(
         def upstream_factory(name: str, command: list[str]):  # noqa: ARG001
             return SubprocessUpstream(command)
 
+    # One shared session store across every upstream + every replica when
+    # backend == redis; the default (memory) gives each gateway its own store.
+    store = _build_store(config)
+
     spool = JsonlSpool(config.spool_path)
     hubs: dict[str, StreamableHttpGateway] = {}
     for up in config.upstreams:
@@ -157,12 +169,24 @@ def build_central_app(
             upstream_factory=_bind_upstream(upstream_factory, up.name, up.command),
             redaction=redaction,
             broker=broker,
+            store=store,
             annotate={"transport": "streamable_http", "upstream": up.name,
                       "policy_source": engine.source},
         )
         hubs[up.name] = StreamableHttpGateway(parts)
 
     return create_central_app(hubs), spool
+
+
+def _build_store(config: GatewayConfig):
+    """Build the shared session store for the configured backend (or None for
+    memory, where each gateway gets its own in-process store)."""
+    if config.state_backend == "redis":
+        from mcp_gateway.state.redis import RedisSessionStore
+
+        assert config.state_url is not None  # enforced by the loader
+        return RedisSessionStore.from_url(config.state_url)
+    return None
 
 
 def _bind_upstream(factory: Callable[[str, list[str]], Any], name: str, command: list[str]):

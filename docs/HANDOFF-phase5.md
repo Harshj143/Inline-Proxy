@@ -18,7 +18,8 @@ Quality gate (every commit):
 PYTHONPATH=src .venv/bin/python -m pytest tests/ -q   # 277 passed, 4 skipped
 .venv/bin/python -m ruff check src tests              # All checks passed!
 ```
-Phase 4 baseline 253 → 5a +10 → 5b +14 → **277**. Only add.
+Phase 4 baseline 253 → 5a +10 → 5b +14 → 5c-i +9 → **286**. Only add.
+`fakeredis` is in the `[dev]` extra (Redis store tests); install it in the venv.
 
 ## Done
 - **Phase 5a COMPLETE** — Streamable HTTP transport, single upstream.
@@ -43,36 +44,39 @@ Phase 4 baseline 253 → 5a +10 → 5b +14 → **277**. Only add.
     policy-filtered tools/list, PII-redacted crm.get_customer result, audit = counts only.
 
 ## In progress
-- Nothing mid-flight. 5a + 5b committed + pushed, green. (Push 5b + open/refresh PR #3 next.)
+- Nothing mid-flight. 5a + 5b + **5c-i (Redis)** committed; 5a/5b pushed. Push 5c-i next.
 
-## Exact next steps — Phase 5c (Redis / Postgres state)
-Goal (exit criterion): two gateway replicas sharing one store see each other's taint/risk.
-1. **Understand the seam first.** `state/base.py` `SessionStore` ABC has `get_or_create(id)`
-   and `get(id)`. `MemorySessionStore` returns LIVE `Session` objects, so mutations (taint,
-   risk_score, suspend) are visible with no write-back. A Redis store CANNOT do that — it
-   must persist `Session` state after each mutation. Read `core/session.py` to see every
-   mutation point (`mark_tainted`, `record_call`, `track_pending`/`resolve_pending`,
-   `risk_score +=` in `risk/scoring.py`). Decide the persistence model:
-   - Simplest robust option: add `save(session)` to the `SessionStore` ABC (no-op for memory),
-     and have the gateway call `store.save(self.session)` after each mutation batch (e.g. at the
-     end of `_handle_tool_call`, on risk updates, on taint). `pending` calls are in-flight and
-     short-lived — decide whether they need to survive a replica handoff (probably not for 5c;
-     document it).
-   - Serialize `Session` to a dict (it has taint fields, risk_score, risk_events, history). Add
-     `Session.to_dict()/from_dict()` if not present.
-2. `state/redis.py` — `RedisSessionStore(SessionStore)` over a Redis hash/JSON per session id;
-   `[redis]` extra (`redis>=5`). Guard import; NO live redis in the sandbox — test with
-   `fakeredis` (add to a test-only path; `pytest.importorskip("fakeredis")`).
-3. `state/postgres.py` — Postgres-backed AUDIT INDEX store (mirror `audit/index.py`'s query
-   surface over Postgres), `[postgres]` extra. This is the index store, not sessions. Skip-guard
-   tests (no live PG); consider `pytest.importorskip("psycopg")` + a skip if no DSN. Keep it thin
-   — the console reads through the same query methods.
-4. Wire `state.backend` in `central/config.py`: `redis` → build a shared `RedisSessionStore` and
-   pass it to every session's gateway (`SecurityGateway(store=…)`); `build_session_parts` needs a
-   `store` param (currently each gateway defaults to its own MemorySessionStore). Extend
-   `_SUPPORTED_STATE`.
-5. Tests: two `SecurityGateway`s sharing one `RedisSessionStore` (fakeredis) — taint/suspend set
-   by one is seen by the other. Config with `backend: redis` builds and wires the shared store.
+## Done (5c-i — Redis session store)
+- `core/session.py` — `Session.to_dict()/from_dict()` (durable state; `pending` excluded).
+- `state/base.py` — `SessionStore.save(session)` no-op default (memory needs none).
+- `core/gateway.py` — new `session_id` param (gateway id == client Mcp-Session-Id → audit
+  correlates, and a replica can bind an existing id); `on_client_line`/`on_upstream_line`
+  now wrap `_dispatch_*` + `self._persist()` (calls `store.save` after every message).
+- `state/redis.py` — `RedisSessionStore` (sync redis client, `[redis]` extra, TTL, fail-closed
+  on corrupt blob, `from_url`).
+- `transports/streamable_http.py` — `build_session_parts(store=…)` passes store + session_id
+  to each gateway.
+- `central/config.py` — `backend: redis` (+ `state.url`) builds ONE shared store for all
+  upstreams/replicas; `_build_store`.
+- Tests `tests/unit/test_state_redis.py` (9, fakeredis) incl. two replicas sharing taint via
+  the REAL gateway. `fakeredis` added to `[dev]`.
+
+## Exact next steps — Phase 5c-ii (Postgres audit-index store)
+1. `state/postgres.py` — a `PostgresAuditIndex` mirroring `audit/index.py`'s QUERY surface
+   (`list_sessions`, `session_detail`, `query_events`, `counts_by_event`, `approval_history`)
+   over Postgres, so the console can read from PG in central mode. This is the INDEX store, not
+   sessions (Redis owns sessions). `[postgres]` extra (`psycopg[binary]>=3.1`), guard the import.
+2. Schema mirrors `audit/index.py` (events keyed on spool offset, sessions roll-up). Reuse the
+   same `read_spool` reader to feed it; keep `catch_up`/`rebuild` semantics.
+3. NO live PG in the sandbox: `pytest.importorskip("psycopg")` AND skip unless a `TEST_PG_DSN`
+   env var is set (there won't be one here → tests skip cleanly). Keep the code correct-by-reading.
+   Consider factoring a shared SQL-ish query contract, but don't over-engineer — a thin parallel
+   implementation is fine.
+4. Optional: let the console/`serve` config point the console's read model at PG. Low priority;
+   the console currently opens SQLite directly. Document rather than force it.
+
+If time is short before the deadline, 5c-ii can be deferred — 5c-i (the exit-criterion shared
+taint/risk) is the important half. Mark clearly in PLAN.md what is done vs deferred.
 
 ## Phase 5d (after 5c green + pushed)
 Dockerfile + docker-compose (gateway + console + redis + postgres) — author carefully, validate
