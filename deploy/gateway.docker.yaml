@@ -1,0 +1,15 @@
+# Central gateway config used by docker-compose (mounted at /config/gateway.yaml).
+# Redis carries session taint/risk across replicas; audit is written to the
+# shared /data volume the console also reads.
+
+audit:
+  spool: /data/audit.log
+
+state:
+  backend: redis
+  url: redis://redis:6379/0
+
+upstreams:
+  - name: mock
+    command: ["python", "demo/mock_server.py"]
+    policy: ["policies/mock-crm.yaml"]

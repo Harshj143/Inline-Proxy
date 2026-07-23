@@ -1,0 +1,78 @@
+# Central-mode stack: gateway + console + shared Redis (sessions) + Postgres
+# (audit index). Bring it up with:
+#
+#   docker compose up --build
+#
+# Then point an MCP client at http://localhost:8080/servers/mock/mcp and open
+# the console at http://localhost:8000 (sign in with the users in
+# deploy/users.example.yaml). The gateway and console share the audit spool over
+# the `audit-data` volume; Redis carries taint/risk across gateway replicas.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mcpg
+      POSTGRES_DB: mcpg_audit
+      # Dev-only: trust local connections so the demo stack needs no committed
+      # password. In production set POSTGRES_PASSWORD (e.g. from a .env file or a
+      # secrets manager) and remove this line.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpg -d mcpg_audit"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: ["serve", "--config", "/config/gateway.yaml", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/gateway.docker.yaml:/config/gateway.yaml:ro
+      - ./policies:/app/policies:ro
+      - ./demo:/app/demo:ro
+      - audit-data:/data
+
+  console:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    command: ["console", "serve", "--index", "/data/audit.db", "--audit", "/data/audit.log",
+              "--users", "/config/users.yaml", "--policy", "/app/policies/mock-crm.yaml",
+              "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      # Cookie-signing secret. Left unset for the demo → the console mints a
+      # random per-process secret (sessions won't survive a restart). Set a
+      # strong stable value via the environment in any real deployment.
+      MCPG_CONSOLE_SECRET: ${MCPG_CONSOLE_SECRET:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./deploy/users.example.yaml:/config/users.yaml:ro
+      - ./policies:/app/policies:ro
+      - audit-data:/data
+
+volumes:
+  audit-data:
+  pg-data:

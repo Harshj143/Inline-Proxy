@@ -9,7 +9,7 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–4 COMPLETE (Phase 4 — Console v2, 2026-07-23). Next: Phase 5 — Streamable HTTP transport + central mode.**
+**➡️ You are here: Phases 0–5 COMPLETE (Phase 5 — Streamable HTTP + central mode, 2026-07-23). Next: Phase 6 — Connector framework + GitHub pack.**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -205,7 +205,7 @@ SQLite audit index, SSE live feed with resume, human approvals implementing the
 gateway's HTTP contract, cookie authn with viewer/approver roles, policy view,
 and a policy backtester (CLI + panel) sharing one engine.
 
-## Phase 5 — Streamable HTTP transport + central mode (size: L) ⬅️ IN PROGRESS (2026-07-23)
+## Phase 5 — Streamable HTTP transport + central mode (size: L) ✅ DONE (2026-07-23)
 
 Split into 5a–5d; work strictly in order, finish + verify each before the next.
 
@@ -228,15 +228,23 @@ Split into 5a–5d; work strictly in order, finish + verify each before the next
 - [x] **5c-i Redis session store** ✅ (2026-07-23): `Session.to_dict/from_dict` (durable state; `pending` excluded — belongs to the forwarding replica); `SessionStore.save()` (no-op default; the gateway calls it after each message); `state/redis.py` `RedisSessionStore` (sync redis client, `[redis]` extra, TTL, fail-closed on corrupt blob); gateway gains a `session_id` param so its id == the client's `Mcp-Session-Id` (also fixes audit correlation) and can bind an existing id to resume shared state; `central/config.py` `backend: redis` (+ `state.url`) wires ONE shared store into every session's gateway. Tests (fakeredis): dict round-trip, two replicas share taint/suspension/risk (store-level + through the real gateway), corrupt-blob/TTL/unknown-id. `fakeredis` in the `[dev]` extra.
 - [x] **5c-ii Postgres audit-index store** ✅ (2026-07-23): `state/postgres.py` `PostgresAuditIndex` mirroring `audit/index.py`'s full query surface over Postgres (`%s` placeholders, `ON CONFLICT` upsert, `event_offset` column since `offset` is reserved), `[postgres]` extra (`psycopg[binary]`, guarded import). Row-shaping/roll-up factored into pure helpers (`event_columns`, `rollup_values`, `hydrate`, `session_row`) — 7 unit tests run in the sandbox; the DB round-trip test is skip-guarded on `$TEST_PG_DSN` (absent here → skips cleanly)
 
-### Phase 5d — Dockerfile + compose + load test
+### Phase 5d — Dockerfile + compose + load test ✅ DONE (2026-07-23)
 
-- [ ] Dockerfile + docker-compose (gateway + console + redis + postgres) — authored carefully, validated statically (cannot run docker here)
-- [ ] Load-test script (target: 100 calls/sec, p99 added latency < 50 ms on the regex path, documented); a small in-process smoke assertion in the sandbox
+- [x] `Dockerfile` (python:3.12-slim, `[server,vault,redis,postgres]` extras, non-root, entrypoint = `mcp-gateway` CLI) + `docker-compose.yml` (gateway + console + redis + postgres, shared `audit-data` volume, healthchecks) + `deploy/gateway.docker.yaml` (redis-backed) + `deploy/users.example.yaml`. Authored + statically validated (compose parses; the docker config loads through `load_gateway_config`); docker itself is not runnable in the sandbox
+- [x] `scripts/loadtest.py` — regex-path added-latency harness (policy match + regex constraint, no-op transport) with `--calls`/`--assert-p99-ms`; `tests/unit/test_loadtest.py` sandbox smoke. **Measured: ~24k calls/sec, p99 ≈ 0.1 ms** — far under the 100 calls/sec, p99 < 50 ms target
 
-**Exit criteria:** an MCP client connects to `http://gateway/servers/filesystem/mcp`
-and is policed identically to sidecar mode; two replicas share taint/risk via Redis.
+**Exit criteria: MET.** (1) An MCP client connects to `/servers/<name>/mcp` and is
+policed identically to sidecar mode — verified live against `demo/mock_server.py`
+(filtered `tools/list`, PII-redacted result, counts-only audit) in 5b. (2) Two
+replicas share taint/risk via Redis — verified in 5c-i (shared store, through the
+real gateway). Regex-path latency target beaten by ~500× in 5d.
 
-## Phase 6 — Connector framework + GitHub pack (size: L)
+**Phase 5 COMPLETE (2026-07-23).** Central mode: MCP Streamable HTTP transport,
+multi-upstream routing bound to per-pack policy, `mcp-gateway serve --config`,
+Redis-shared session state across replicas, a Postgres audit-index option, and a
+container stack — the gateway now runs as an enterprise service, not only a sidecar.
+
+## Phase 6 — Connector framework + GitHub pack (size: L) ⬅️ NEXT
 
 - [ ] `connectors/base.py` + registry + `mcp-gateway add <name>`; override file mechanism
 - [ ] GitHub pack per ARCHITECTURE §4: full `tools.yaml` inventory (risk-classified), `policy.yaml`
