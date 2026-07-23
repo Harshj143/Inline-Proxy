@@ -247,6 +247,20 @@ def _build_parser() -> argparse.ArgumentParser:
     hashpw.add_argument("--password", default=None,
                         help="password to hash; omit to read one line from stdin")
 
+    serve = sub.add_parser(
+        "serve",
+        help="run the central multi-upstream HTTP gateway (needs the [server] extra)",
+        description=(
+            "Front many MCP servers over Streamable HTTP, each at "
+            "/servers/<name>/mcp policed by its own policy pack, per a "
+            "gateway.yaml config."
+        ),
+    )
+    serve.add_argument("--config", required=True, metavar="FILE",
+                       help="gateway config (YAML or JSON): upstreams, policies, audit, state")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8080)
+
     sub.add_parser("version", help="print the gateway version")
     return parser
 
@@ -491,6 +505,29 @@ def _run_console_serve(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _run_serve(ns: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+
+        from mcp_gateway.central.config import build_central_app, load_gateway_config
+    except ModuleNotFoundError:
+        raise GatewayError(
+            "the central gateway needs the [server] extra: pip install 'mcp-gateway[server]'"
+        ) from None
+
+    config = load_gateway_config(ns.config)
+    app, _spool = build_central_app(config)
+    names = ", ".join(sorted(config.names))
+    print(
+        f"mcp-gateway serve: {len(config.upstreams)} upstream(s) [{names}] on "
+        f"http://{ns.host}:{ns.port}/servers/<name>/mcp "
+        f"(audit → {config.spool_path}, state → {config.state_backend})",
+        file=sys.stderr,
+    )
+    uvicorn.run(app, host=ns.host, port=ns.port)
+    return 0
+
+
 def _run_console_hash_password(ns: argparse.Namespace) -> int:
     from mcp_gateway.console.auth import hash_password
 
@@ -578,6 +615,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _run_policy_backtest(ns)
         if ns.command == "audit" and ns.audit_command == "reindex":
             return _run_audit_reindex(ns)
+        if ns.command == "serve":
+            return _run_serve(ns)
         if ns.command == "console":
             if ns.console_command == "serve":
                 return _run_console_serve(ns)

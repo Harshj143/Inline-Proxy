@@ -91,3 +91,33 @@ class Session:
 
     def resolve_pending(self, request_id: Any) -> PendingCall | None:
         return self.pending.pop(request_id, None)
+
+    # ---- serialization for a shared store (Phase 5c) ----------------------
+    # `pending` is intentionally excluded: an in-flight call belongs to the
+    # replica that forwarded it and cannot be handed off (it holds a live
+    # perf_counter start and a RedactionSpec). Everything else is the durable,
+    # shareable state — taint, risk, suspension, history.
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "started_at": self.started_at,
+            "suspended": self.suspended,
+            "history": list(self.history),
+            "tainted": self.tainted,
+            "taint_origin": self.taint_origin,
+            "risk_score": self.risk_score,
+            "risk_events": list(self.risk_events),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Session:
+        return cls(
+            id=data["id"],
+            started_at=data.get("started_at", ""),
+            suspended=bool(data.get("suspended", False)),
+            history=list(data.get("history", [])),
+            tainted=bool(data.get("tainted", False)),
+            taint_origin=data.get("taint_origin"),
+            risk_score=int(data.get("risk_score", 0)),
+            risk_events=list(data.get("risk_events", [])),
+        )
