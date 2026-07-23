@@ -205,15 +205,34 @@ SQLite audit index, SSE live feed with resume, human approvals implementing the
 gateway's HTTP contract, cookie authn with viewer/approver roles, policy view,
 and a policy backtester (CLI + panel) sharing one engine.
 
-## Phase 5 — Streamable HTTP transport + central mode (size: L) ⬅️ NEXT
+## Phase 5 — Streamable HTTP transport + central mode (size: L) ⬅️ IN PROGRESS (2026-07-23)
 
-- [ ] `transports/streamable_http.py` — MCP Streamable HTTP endpoint, `Mcp-Session-Id`, SSE streams
-- [ ] Multi-upstream routing: `/servers/<name>/mcp` bound to pack + policy; per-upstream supervision/backoff
-- [ ] `state/redis.py` + `state/postgres.py` (index); config switches memory/sqlite ↔ redis/postgres
-- [ ] `mcp-gateway serve --config gateway.yaml`; Dockerfile + docker-compose (gateway + console + redis + postgres)
-- [ ] Load test: sustained 100 calls/sec, p99 added latency < 50 ms on regex path
+Split into 5a–5d; work strictly in order, finish + verify each before the next.
 
-**Exit criteria:** Claude Code connects to `http://gateway/servers/filesystem/mcp`
+### Phase 5a — Streamable HTTP transport, single upstream ✅ DONE (2026-07-23)
+
+- [x] `transports/upstream.py` — `SubprocessUpstream` + `Upstream` protocol: launch + pump an upstream MCP subprocess (16 MiB frame limit, fail-closed on overrun, grace-then-kill shutdown), factored so the HTTP transport reuses it and tests inject an in-process fake
+- [x] `transports/streamable_http.py` — per-`Mcp-Session-Id` session = its own `SecurityGateway` + upstream, acting as the gateway's `Transport` (`send_client` resolves the pending POST future or enqueues to the session's SSE channel; `send_upstream` writes to the upstream). `create_streamable_http_app(...)` FastAPI app: `POST /mcp` (initialize → mint session id; request → policed, awaits correlated response as JSON, gateway-deadline → JSON-RPC error; notification → 202), `GET /mcp` (SSE server→client channel), `DELETE /mcp` (terminate)
+- [x] Per-session audit recorder over a shared spool via `_NonClosingSink` (no cross-session `session_id` bleed; shared spool closed once at app shutdown); fail-closed on unknown/missing session id (404/400)
+- [x] Tests: in-process ASGI via httpx ASGITransport with a fake upstream — initialize handshake + session id, allowed call reaches upstream, blocked call returns the policy-denied error (never reaches upstream), tools/list filtered, unknown session 404, missing session 400, notification 202, DELETE terminates, session isolation, gateway timeout (10 new; 263 total green, ruff clean)
+
+### Phase 5b — Multi-upstream routing + `mcp-gateway serve --config`
+
+- [ ] `/servers/<name>/mcp` routing, each bound to its own policy pack + engine; per-upstream supervision/backoff
+- [ ] `gateway.yaml` config (upstreams, policies, state backend, console) + loader; `mcp-gateway serve --config gateway.yaml`
+- [ ] Tests: two upstreams policed by different policies on one app; config load + validation
+
+### Phase 5c — Redis / Postgres state (honor the SessionStore seam)
+
+- [ ] `state/redis.py` (SessionStore over Redis — shared taint/risk across replicas) + `state/postgres.py` (audit index store); config switches memory/sqlite ↔ redis/postgres, deps in `[redis]`/`[postgres]` extras
+- [ ] Tests: fakeredis (or skip-guarded) — two gateways sharing one store see each other's taint/suspension; NO live redis/postgres in the sandbox
+
+### Phase 5d — Dockerfile + compose + load test
+
+- [ ] Dockerfile + docker-compose (gateway + console + redis + postgres) — authored carefully, validated statically (cannot run docker here)
+- [ ] Load-test script (target: 100 calls/sec, p99 added latency < 50 ms on the regex path, documented); a small in-process smoke assertion in the sandbox
+
+**Exit criteria:** an MCP client connects to `http://gateway/servers/filesystem/mcp`
 and is policed identically to sidecar mode; two replicas share taint/risk via Redis.
 
 ## Phase 6 — Connector framework + GitHub pack (size: L)
