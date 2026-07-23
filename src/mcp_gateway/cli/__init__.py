@@ -1,8 +1,8 @@
 """The `mcp-gateway` command-line interface.
 
 Phase 1 ships `wrap`, `version`, and the `policy` subcommands (validate,
-show, test). `serve`, `init`, and `add` arrive in their phases
-(docs/PLAN.md).
+show, test). Phase 4a adds `policy backtest` and `audit reindex` (the console's
+read model). `serve`, `init`, and `add` arrive in their phases (docs/PLAN.md).
 
 Usage:
     mcp-gateway wrap --policy base.yaml --policy override.yaml -- \
@@ -10,6 +10,8 @@ Usage:
     mcp-gateway policy validate policies/*.yaml
     mcp-gateway policy show --policy base.yaml --policy override.yaml
     mcp-gateway policy test --policy pack.yaml --tests pack.tests.yaml
+    mcp-gateway policy backtest --policy new.yaml --audit audit.log
+    mcp-gateway audit reindex --audit audit.log --index audit.db
 """
 
 from __future__ import annotations
@@ -145,6 +147,39 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     test.add_argument("--policy", action="append", required=True, metavar="FILE")
     test.add_argument("--tests", required=True, metavar="FILE")
+
+    backtest = policy_sub.add_parser(
+        "backtest",
+        help="replay recorded calls from an audit log through a policy (blast radius)",
+        description=(
+            "Re-evaluate every tool call recorded in an audit spool against a "
+            "candidate policy and report what would be decided differently. "
+            "Action-level: argument constraints, taint/sequence, and approvals "
+            "are not replayed (the audit log is counts-only)."
+        ),
+    )
+    backtest.add_argument("--policy", action="append", required=True, metavar="FILE")
+    backtest.add_argument("--audit", required=True, metavar="FILE",
+                          help="audit spool (JSONL) whose recorded calls are replayed")
+    backtest.add_argument("--json", action="store_true", help="machine-readable output")
+
+    audit = sub.add_parser("audit", help="build and inspect the audit index")
+    audit_sub = audit.add_subparsers(dest="audit_command", required=True)
+    reindex = audit_sub.add_parser(
+        "reindex",
+        help="rebuild the SQLite audit index from the JSONL spool",
+        description=(
+            "The index is a disposable read model derived from the spool (the "
+            "source of truth). By default it rebuilds from scratch; --incremental "
+            "only ingests spool records written since the last run."
+        ),
+    )
+    reindex.add_argument("--audit", default="audit.log", metavar="FILE",
+                         help="audit spool path (JSONL)")
+    reindex.add_argument("--index", default="audit.db", metavar="FILE",
+                         help="SQLite index path (created if absent)")
+    reindex.add_argument("--incremental", action="store_true",
+                         help="catch up from the stored watermark instead of a full rebuild")
 
     redact = sub.add_parser(
         "redact",
@@ -324,6 +359,38 @@ def _run_policy_test(ns: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _run_policy_backtest(ns: argparse.Namespace) -> int:
+    from mcp_gateway.policy.backtest import backtest_policy, format_report
+
+    engine = PolicyEngine.load(ns.policy)
+    report = backtest_policy(ns.audit, engine)
+    if ns.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(format_report(report))
+    # A backtest is a report, not a gate; exit 0 even when calls would flip.
+    return 0
+
+
+def _run_audit_reindex(ns: argparse.Namespace) -> int:
+    from mcp_gateway.audit.index import AuditIndex
+
+    with AuditIndex(ns.index) as index:
+        stats = index.catch_up(ns.audit) if ns.incremental else index.rebuild(ns.audit)
+    verb = "caught up" if ns.incremental else "rebuilt"
+    print(
+        f"{verb} {ns.index} from {ns.audit}: "
+        f"{stats['inserted']} event(s) indexed, next_offset={stats['next_offset']}"
+    )
+    if stats["bad_lines"]:
+        print(f"  warning: {stats['bad_lines']} unparseable line(s) skipped",
+              file=sys.stderr)
+    if stats["torn_tail"]:
+        print("  note: a torn final line was skipped (writer still appending)",
+              file=sys.stderr)
+    return 0
+
+
 def _run_redact(ns: argparse.Namespace) -> int:
     from mcp_gateway.redaction import build_engine
     from mcp_gateway.redaction.eval import evaluate, format_report
@@ -396,6 +463,10 @@ def main(argv: list[str] | None = None) -> int:
                 return _run_policy_show(ns)
             if ns.policy_command == "test":
                 return _run_policy_test(ns)
+            if ns.policy_command == "backtest":
+                return _run_policy_backtest(ns)
+        if ns.command == "audit" and ns.audit_command == "reindex":
+            return _run_audit_reindex(ns)
         if ns.command == "redact":
             return _run_redact(ns)
         if ns.command == "version":

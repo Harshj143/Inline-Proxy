@@ -25,6 +25,11 @@ htmlcov/
 audit.log
 *.audit.log
 audit*.jsonl
+# Audit index (a disposable read model rebuilt from the spool) + its WAL files
+audit.db
+*.audit.db
+audit.db-wal
+audit.db-shm
 
 # Demo/sandbox scratch (real files the filesystem demo writes to)
 sandbox/

@@ -9,7 +9,7 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–3 COMPLETE + configurable failure posture (2026-07-19). Next: Phase 4 — Console v2.**
+**➡️ You are here: Phase 4 — Console v2 IN PROGRESS (started 2026-07-23). Phases 0–3 COMPLETE + configurable failure posture (2026-07-19).**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -162,11 +162,37 @@ human approvals + behavioral monitoring, all feeding one risk score.
 
 ## Phase 4 — Console v2 (size: M)
 
-- [ ] FastAPI app (`[server]` extra): REST + OpenAPI — sessions, events, policy, approvals, backtest
-- [ ] SQLite (WAL) index store fed from the spool; rebuildable (`mcp-gateway audit reindex`)
-- [ ] SSE live feed with `Last-Event-ID` resume; approvals UI; sessions + replay; policy view
-- [ ] `mcp-gateway policy backtest --audit <log>` in core CLI; console backtest panel calls the same engine
-- [ ] Console authn (session cookie against local users now; OIDC later), read-only vs approver roles
+**➡️ You are here (2026-07-23): Phase 4 in progress. Split into 4a/4b/4c below.**
+
+Split rationale: 4a is pure stdlib (sqlite3) and fully unit-testable with no
+server dependency, so it lands first and the whole console reads from it. 4b
+adds the FastAPI app (`[server]` extra) over that index. 4c is the browser UI.
+Each sub-phase is finished + verified (tests green, ruff clean, PLAN updated)
+before the next starts.
+
+### Phase 4a — Audit index + backtest (no server dep) ✅ DONE (2026-07-23)
+
+- [x] `audit/reader.py` — tolerant JSONL spool reader (skips a torn final line, bad lines counted not fatal; byte offset per record = `Last-Event-ID`)
+- [x] `audit/index.py` — SQLite (WAL) index store fed from the spool: `events` table (PK = spool byte offset), derived `sessions` roll-up, `meta` watermark; incremental catch-up (idempotent) + full rebuild
+- [x] `mcp-gateway audit reindex --audit <log> --index <db> [--incremental]` — rebuild/catch up the index from the spool
+- [x] Query layer (`AuditIndex.query_events`, `list_sessions`, `session_detail`, `approval_history`, `counts_by_event`) — the REST surface reads through this (live *pending* approvals are held in the 4b server, not the audit index)
+- [x] `policy/backtest.py` — replay recorded tool calls through a (possibly new) policy, diff the action decisions vs what was recorded (blast-radius); tool+role granularity (audit is counts-only, so no argument-level constraint replay); collapses identical calls, flags the block stage for honesty
+- [x] `mcp-gateway policy backtest --audit <log> --policy <new> [--json]` in the core CLI
+- [x] Tests: reader torn-line tolerance, index build/rebuild/incremental, query layer, backtest diff (20 new; 217 total green, ruff clean)
+
+### Phase 4b — FastAPI app (`[server]` extra)
+
+- [ ] `console/app.py` — FastAPI app factory; REST + OpenAPI over the index: sessions, events, policy, backtest
+- [ ] SSE live feed (`/api/stream`) tailing the spool, `Last-Event-ID` resume from the index offset
+- [ ] Approvals endpoint implementing the `channels/http.py` contract: gateway POSTs `ApprovalRequest.to_wire()` to `/api/approvals`, BLOCKS until a human decides; `{approved, approver, note}` response. Pending-queue + resolve endpoints for the UI
+- [ ] Cookie-session authn against local users (`console/auth.py`); read-only vs approver roles; approve requires the approver role
+- [ ] `mcp-gateway console serve` CLI (in the `[server]` extra); declare fastapi/uvicorn already in extras
+- [ ] Tests: TestClient over REST + OpenAPI, SSE resume, approvals round-trip + blocking, authn/role gating
+
+### Phase 4c — Browser console UI
+
+- [ ] Static SPA (vanilla, served by FastAPI — minimal-dependency ethos): live feed, click-to-approve, session list + replay, policy view, backtest panel
+- [ ] Login page (cookie session); approver-only approve controls
 
 **Exit criteria:** console_demo flow works browser-first (live feed, click-to-approve,
 replay); `curl` against the OpenAPI spec covers every console feature.
