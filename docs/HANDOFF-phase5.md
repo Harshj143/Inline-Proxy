@@ -3,8 +3,8 @@
 _Rewritten from scratch each chunk. Last update: 2026-07-23._
 
 Branch: `feat/streamable-http`, **stacked on `feat/console-v2`** (Phase 4, unmerged).
-Never commit to `main` or to `feat/console-v2`. Draft PR: "Phase 5: Streamable
-HTTP transport + central mode", base `feat/console-v2` (open after first push).
+Never commit to `main` or to `feat/console-v2`. Draft PR #3: "Phase 5: Streamable
+HTTP transport + central mode", base `feat/console-v2`.
 
 ## Environment (next run MUST read)
 Repo needs Python **>=3.12**; container default `python3` is 3.11 and pip is
@@ -15,100 +15,88 @@ python3.12 -m venv .venv
 ```
 Quality gate (every commit):
 ```
-PYTHONPATH=src .venv/bin/python -m pytest tests/ -q   # 263 passed, 4 skipped
+PYTHONPATH=src .venv/bin/python -m pytest tests/ -q   # 277 passed, 4 skipped
 .venv/bin/python -m ruff check src tests              # All checks passed!
 ```
-Phase 4 baseline was 253; Phase 5a added 10 → 263. Only add.
+Phase 4 baseline 253 → 5a +10 → 5b +14 → **277**. Only add.
 
 ## Done
 - **Phase 5a COMPLETE** — Streamable HTTP transport, single upstream.
-  - `src/mcp_gateway/transports/upstream.py` — `Upstream` protocol +
-    `SubprocessUpstream`: `start(on_line, on_exit)` launches the subprocess and
-    pumps stdout as newline-JSON to `on_line`; `send(line)` writes stdin;
-    `shutdown()` terminates (grace then kill). 16 MiB frame limit, fail-closed on
-    overrun. Pure stdlib — importable without the [server] extra.
-  - `src/mcp_gateway/transports/streamable_http.py` — the central-mode transport.
-    - `_Session` = one MCP session; IS the gateway's `Transport`. `send_upstream`
-      → upstream; `send_client` → resolve the in-flight POST future by JSON-RPC id,
-      else enqueue to the session's SSE channel. `handle_request` registers a
-      future, feeds `gateway.on_client_line`, awaits the correlated reply (or a
-      `response_timeout` → JSON-RPC error -32002).
-    - `StreamableHttpGateway` — session registry: `create()` mints a `uuid` session
-      id, builds gateway+upstream via a `SessionParts` factory, `on_start`s and
-      `start`s the upstream; `get`, `terminate`, `shutdown_all`.
-    - `_NonClosingSink` — wraps the shared spool so each per-session `AuditRecorder`
-      (own `session_id`) can't close it; the real spool closes once at app shutdown.
-    - `build_session_parts(engine, spool, upstream_factory, ...)` — default factory:
-      sessions share engine/redaction/broker/spool, each gets its own gateway +
-      recorder + upstream.
-    - `create_streamable_http_app(hub, path="/mcp")` — FastAPI: `POST /mcp`
-      (initialize w/o session → mint + `Mcp-Session-Id` header; request → policed,
-      await reply as JSON; notification → 202; unknown session → 404; missing → 400),
-      `GET /mcp` (SSE server→client), `DELETE /mcp` (terminate). Lifespan shuts down
-      all sessions.
-    - **IMPORTANT**: like `console/app.py`, this module omits `from __future__ import
-      annotations` and imports FastAPI at module top (FastAPI misreads stringised
-      `request: Request` as a query param). Keep it that way; it's `[server]`-gated.
-  - Tests: `tests/unit/test_streamable_http.py` (10) with an in-process `FakeUpstream`.
+  - `transports/upstream.py` — `Upstream` protocol + `SubprocessUpstream` (launch+pump,
+    16 MiB limit, fail-closed on overrun, grace-then-kill). Pure stdlib.
+  - `transports/streamable_http.py` — `_Session` (IS the gateway's Transport;
+    send_client resolves the in-flight POST future by id or enqueues to SSE; send_upstream
+    → upstream; handle_request registers future, feeds on_client_line, awaits reply or
+    times out → -32002), `StreamableHttpGateway` (session registry: create/get/terminate/
+    shutdown_all), `_NonClosingSink` (shared spool, per-session recorder), `build_session_parts`,
+    `create_streamable_http_app` (single upstream at `/mcp`).
+- **Phase 5b COMPLETE** — multi-upstream routing + `serve --config`.
+  - `transports/streamable_http.py` — POST/GET/DELETE logic factored into module-level
+    `_handle_post/_handle_get/_handle_delete(hub, request)`; `create_central_app(hubs)`
+    registers `/servers/{name}/mcp` (+ `GET /servers`); unknown upstream → 404 (-32004).
+  - `central/config.py` — `GatewayConfig`/`UpstreamConfig`, `load_gateway_config` (YAML/JSON,
+    fail-closed validation), `build_central_app(config, upstream_factory=None)` → `(app, spool)`;
+    each upstream gets engine + RedactionService + deny-broker over a shared spool. Factory
+    injectable so tests use fakes.
+  - CLI `mcp-gateway serve --config gateway.yaml [--host --port]`; `gateway.example.yaml`.
+  - Verified LIVE against `demo/mock_server.py` (real subprocess): initialize handshake,
+    policy-filtered tools/list, PII-redacted crm.get_customer result, audit = counts only.
 
 ## In progress
-- Nothing mid-flight. 5a committed + pushed, green.
+- Nothing mid-flight. 5a + 5b committed + pushed, green. (Push 5b + open/refresh PR #3 next.)
 
-## Exact next steps — Phase 5b (multi-upstream routing + `serve --config`)
-1. `transports/streamable_http.py` currently serves ONE upstream at a fixed path.
-   For 5b, mount many: `/servers/<name>/mcp`, each a `StreamableHttpGateway` bound to
-   its own `PolicyEngine` (pack + policy). Options: (a) a factory that builds one app
-   with multiple routers keyed by `<name>`, or (b) refactor `create_streamable_http_app`
-   to take a `dict[name -> StreamableHttpGateway]` and register `/servers/{name}/mcp`
-   routes that dispatch on the path param. Prefer (b) — one app, N upstreams.
-   Keep per-upstream isolation: a session id belongs to one upstream (namespace the
-   registry by upstream name, or include the name in session lookup).
-2. Per-upstream supervision/backoff: if a `SubprocessUpstream` dies, `_on_upstream_exit`
-   already marks the session closed. Add restart/backoff policy at the hub level for
-   central mode (a dead upstream shouldn't kill the process; new sessions respawn it).
-3. `gateway.yaml` config: upstreams (name → command + policy files), state backend
-   (memory/sqlite now; redis/postgres in 5c), console wiring. Add a loader (reuse the
-   yaml/json pattern in `cli/__init__.py::_load_config_file_generic`). `mcp-gateway
-   serve --config gateway.yaml` starts uvicorn with the multi-upstream app (+ optionally
-   the console app mounted). Declare no new core deps; server deps already in [server].
-4. Tests: two upstreams under different policies on one app (fake upstreams), each policed
-   independently; config load + validation (bad config fails closed with a clear error).
+## Exact next steps — Phase 5c (Redis / Postgres state)
+Goal (exit criterion): two gateway replicas sharing one store see each other's taint/risk.
+1. **Understand the seam first.** `state/base.py` `SessionStore` ABC has `get_or_create(id)`
+   and `get(id)`. `MemorySessionStore` returns LIVE `Session` objects, so mutations (taint,
+   risk_score, suspend) are visible with no write-back. A Redis store CANNOT do that — it
+   must persist `Session` state after each mutation. Read `core/session.py` to see every
+   mutation point (`mark_tainted`, `record_call`, `track_pending`/`resolve_pending`,
+   `risk_score +=` in `risk/scoring.py`). Decide the persistence model:
+   - Simplest robust option: add `save(session)` to the `SessionStore` ABC (no-op for memory),
+     and have the gateway call `store.save(self.session)` after each mutation batch (e.g. at the
+     end of `_handle_tool_call`, on risk updates, on taint). `pending` calls are in-flight and
+     short-lived — decide whether they need to survive a replica handoff (probably not for 5c;
+     document it).
+   - Serialize `Session` to a dict (it has taint fields, risk_score, risk_events, history). Add
+     `Session.to_dict()/from_dict()` if not present.
+2. `state/redis.py` — `RedisSessionStore(SessionStore)` over a Redis hash/JSON per session id;
+   `[redis]` extra (`redis>=5`). Guard import; NO live redis in the sandbox — test with
+   `fakeredis` (add to a test-only path; `pytest.importorskip("fakeredis")`).
+3. `state/postgres.py` — Postgres-backed AUDIT INDEX store (mirror `audit/index.py`'s query
+   surface over Postgres), `[postgres]` extra. This is the index store, not sessions. Skip-guard
+   tests (no live PG); consider `pytest.importorskip("psycopg")` + a skip if no DSN. Keep it thin
+   — the console reads through the same query methods.
+4. Wire `state.backend` in `central/config.py`: `redis` → build a shared `RedisSessionStore` and
+   pass it to every session's gateway (`SecurityGateway(store=…)`); `build_session_parts` needs a
+   `store` param (currently each gateway defaults to its own MemorySessionStore). Extend
+   `_SUPPORTED_STATE`.
+5. Tests: two `SecurityGateway`s sharing one `RedisSessionStore` (fakeredis) — taint/suspend set
+   by one is seen by the other. Config with `backend: redis` builds and wires the shared store.
 
-## Phase 5c / 5d (later — do NOT start until 5b is green + pushed)
-- 5c: `state/redis.py` (SessionStore over Redis) + `state/postgres.py` (audit index).
-  Honor the `SessionStore` ABC in `state/base.py` (`get_or_create`, `get`). Deps in
-  `[redis]`/`[postgres]` extras. NO live redis/postgres in the sandbox — use `fakeredis`
-  (add to a test path) or skip-guard the tests. Prove two gateways sharing one store see
-  each other's taint/suspension (the exit-criteria "two replicas share taint/risk").
-  NOTE: the `SecurityGateway` currently binds ONE session at construction and does
-  `store.get_or_create(uuid...)`. For shared state, the store is the seam — a Redis store
-  makes `Session` reads/writes hit Redis. Check how `Session` mutations (taint, risk_score)
-  are persisted; `MemorySessionStore` holds live objects, but a Redis store needs explicit
-  write-back after each mutation. This may need a small `store.save(session)` addition to
-  the `SessionStore` ABC — design it in 5c.
-- 5d: Dockerfile + docker-compose (gateway + console + redis + postgres) — author carefully,
-  validate statically (no docker here). Load-test script (100 calls/sec, p99 < 50 ms on the
-  regex path, documented) + a small in-process smoke assertion.
+## Phase 5d (after 5c green + pushed)
+Dockerfile + docker-compose (gateway + console + redis + postgres) — author carefully, validate
+statically (no docker here). Load-test script (100 calls/sec, p99 < 50 ms on the regex path,
+documented) + a small in-process smoke assertion.
 
 ## Gotchas / decisions made
-- **Per-session gateway** is the central-mode model: reuse the gateway unchanged, one per
-  `Mcp-Session-Id`. Don't try to make one gateway multiplex sessions — its `self.session`
-  is singular by design.
-- **Shared spool, per-session recorder** — a shared recorder's `default_fields.setdefault
-  ("session_id", ...)` would stamp the FIRST session's id on everyone. `_NonClosingSink`
-  keeps the shared spool open across session ends.
-- **Re-entrant response path**: with a synchronous fake upstream, `send_upstream` →
-  `on_line` → `on_upstream_line` → `send_client` → resolve future all run nested inside
-  `on_client_line`. Works because the gateway `track_pending`s before `send_upstream`.
-  Real subprocess upstreams are async (response arrives on the pump task) — both paths
-  are exercised (unit fake = sync; a real e2e in 5b/5d = async).
-- **FastAPI annotation quirk** (see 5a IMPORTANT above) — same as the console.
-- **CI is green on Phase 4 PR #2** (GitGuardian false-positive on test fixtures was fixed
-  by rewriting history to remove the credential-like literals; `.gitguardian.yaml`'s App
-  ignores only apply from `main`, not a PR branch — remember that for any future fixture).
-- Sub-phase discipline: finish + verify 5b (tests green, ruff clean, PLAN + this file
-  updated, push) before 5c.
+- **Per-session gateway** is the central-mode model — one `SecurityGateway` per `Mcp-Session-Id`.
+  For 5c shared state, the `store` is the seam: inject ONE shared store into every session's
+  gateway so they share taint/risk. `build_session_parts` must grow a `store` param.
+- **Shared spool, per-session recorder** (`_NonClosingSink`) avoids `session_id` bleed.
+- **FastAPI annotation quirk**: `streamable_http.py` and `console/app.py` omit `from __future__
+  import annotations` and import FastAPI at module top (else body/Request params misread as query).
+  `central/config.py` is pure (no FastAPI at top) — it imports the app builder lazily inside
+  `build_central_app`. Keep that split.
+- **Re-entrant vs async response**: sync fake upstream resolves within send_upstream; real
+  subprocess resolves later on the pump task. Both work (verified live with the mock server).
+- **CI**: Phase 4 PR #2 GitGuardian went green after rewriting history to drop credential-like
+  test literals — the App only honors `.gitguardian.yaml` ignores from `main`, not a PR branch.
+  Watch for this if a new test fixture ever trips it.
+- Sub-phase discipline: finish + verify 5c (tests green, ruff clean, PLAN + this file updated,
+  push) before 5d.
 
 ## Deadline
 A fresh scheduled run continues from origin `feat/streamable-http` + this file. Stop by
-09:00 UTC; per-chunk pushes are the safety net.
+09:00 UTC; per-chunk pushes are the safety net. If all of Phase 5 completes before then, mark it
+done in PLAN.md, move the marker to Phase 6, write a final handoff, push, STOP (do not start Phase 6).

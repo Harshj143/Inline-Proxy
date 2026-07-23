@@ -1,0 +1,21 @@
+# Central-mode gateway config (Phase 5). Front many MCP servers over Streamable
+# HTTP, each at /servers/<name>/mcp policed by its own policy pack.
+#
+#   mcp-gateway serve --config gateway.example.yaml
+#
+# Then point an MCP client at, e.g., http://127.0.0.1:8080/servers/mock/mcp.
+
+audit:
+  spool: audit.log            # JSONL audit spool (source of truth)
+
+state:
+  backend: memory             # memory today; redis/postgres arrive in Phase 5c
+
+upstreams:
+  - name: mock
+    command: ["python", "demo/mock_server.py"]
+    policy: ["policies/mock-crm.yaml"]
+
+  # - name: github
+  #   command: ["github-mcp-server", "stdio"]
+  #   policy: ["policies/github.yaml"]     # (connector pack — Phase 6)

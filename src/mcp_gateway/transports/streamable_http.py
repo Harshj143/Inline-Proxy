@@ -238,12 +238,69 @@ def build_session_parts(
     return make
 
 
-def create_streamable_http_app(
-    gateway: StreamableHttpGateway,
-    *,
-    path: str = "/mcp",
-):
-    """Build a FastAPI app exposing one upstream over MCP Streamable HTTP."""
+def _json_line(line: str, headers: dict[str, str] | None = None) -> JSONResponse:
+    import json as _json
+
+    return JSONResponse(content=_json.loads(line), headers=headers or {})
+
+
+def _rpc_error(request_id: Any, code: int, message: str, status: int) -> JSONResponse:
+    return JSONResponse(
+        content=error_response(request_id, code, message), status_code=status
+    )
+
+
+async def _handle_post(hub: StreamableHttpGateway, request: Request):
+    """POST semantics for one upstream hub. Shared by single- and multi-upstream
+    apps so routing is the only thing that differs between them."""
+    try:
+        raw = await request.json()
+    except Exception:  # noqa: BLE001
+        return _rpc_error(None, -32700, "parse error: body is not JSON", 400)
+    if not isinstance(raw, dict):
+        return _rpc_error(None, -32600, "invalid request: expected one JSON-RPC object", 400)
+
+    msg = decode_line(encode(raw))
+    assert msg is not None
+    session_id = request.headers.get(SESSION_HEADER)
+
+    # initialize with no session → mint one on this hub.
+    if session_id is None and msg.method == METHOD_INITIALIZE:
+        session = await hub.create()
+        body = await session.handle_request(raw, msg.id)
+        return _json_line(body, headers={SESSION_HEADER.title(): session.id})
+
+    if session_id is None:
+        return _rpc_error(msg.id, -32600, "missing Mcp-Session-Id header", 400)
+    session = hub.get(session_id)
+    if session is None:
+        return _rpc_error(msg.id, -32001, "unknown or expired session", 404)
+
+    if msg.is_request:
+        body = await session.handle_request(raw, msg.id)
+        return _json_line(body)
+    # Notification / response from client → forward, no reply expected.
+    await session.handle_notification(raw)
+    return Response(status_code=202)
+
+
+async def _handle_get(hub: StreamableHttpGateway, request: Request):
+    session_id = request.headers.get(SESSION_HEADER)
+    session = hub.get(session_id) if session_id else None
+    if session is None:
+        return _rpc_error(None, -32001, "unknown or expired session", 404)
+    return StreamingResponse(session.sse_events(), media_type="text/event-stream")
+
+
+async def _handle_delete(hub: StreamableHttpGateway, request: Request):
+    session_id = request.headers.get(SESSION_HEADER)
+    if not session_id or not await hub.terminate(session_id):
+        return Response(status_code=404)
+    return Response(status_code=204)
+
+
+def create_streamable_http_app(gateway: StreamableHttpGateway, *, path: str = "/mcp"):
+    """Build a FastAPI app exposing ONE upstream over MCP Streamable HTTP."""
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -256,58 +313,64 @@ def create_streamable_http_app(
 
     @app.post(path)
     async def post(request: Request):
-        try:
-            raw = await request.json()
-        except Exception:  # noqa: BLE001
-            return _rpc_error(None, -32700, "parse error: body is not JSON", 400)
-        if not isinstance(raw, dict):
-            return _rpc_error(None, -32600, "invalid request: expected one JSON-RPC object", 400)
-
-        msg = decode_line(encode(raw))
-        assert msg is not None
-        session_id = request.headers.get(SESSION_HEADER)
-
-        # initialize with no session → mint one.
-        if session_id is None and msg.method == METHOD_INITIALIZE:
-            session = await gateway.create()
-            body = await session.handle_request(raw, msg.id)
-            return _json_line(body, headers={SESSION_HEADER.title(): session.id})
-
-        if session_id is None:
-            return _rpc_error(msg.id, -32600, "missing Mcp-Session-Id header", 400)
-        session = gateway.get(session_id)
-        if session is None:
-            return _rpc_error(msg.id, -32001, "unknown or expired session", 404)
-
-        if msg.is_request:
-            body = await session.handle_request(raw, msg.id)
-            return _json_line(body)
-        # Notification / response from client → forward, no reply expected.
-        await session.handle_notification(raw)
-        return Response(status_code=202)
+        return await _handle_post(gateway, request)
 
     @app.get(path)
     async def get(request: Request):
-        session_id = request.headers.get(SESSION_HEADER)
-        session = gateway.get(session_id) if session_id else None
-        if session is None:
-            return _rpc_error(None, -32001, "unknown or expired session", 404)
-        return StreamingResponse(session.sse_events(), media_type="text/event-stream")
+        return await _handle_get(gateway, request)
 
     @app.delete(path)
     async def delete(request: Request):
-        session_id = request.headers.get(SESSION_HEADER)
-        if not session_id or not await gateway.terminate(session_id):
+        return await _handle_delete(gateway, request)
+
+    return app
+
+
+def create_central_app(hubs: dict[str, StreamableHttpGateway]):
+    """Build a FastAPI app routing many upstreams at `/servers/<name>/mcp`.
+
+    Each named upstream has its own hub (policy pack + session registry), so a
+    session id minted for one upstream is unknown to another — per-endpoint
+    isolation keeps policy attribution and `tools/list` filtering trivial
+    (docs/ARCHITECTURE.md §1). An unknown upstream name is a 404 (fail closed).
+    """
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        yield
+        for hub in hubs.values():
+            await hub.shutdown_all()
+
+    app = FastAPI(
+        title="MCP Security Gateway — Central", version="1", lifespan=lifespan
+    )
+
+    def _hub(name: str) -> StreamableHttpGateway | None:
+        return hubs.get(name)
+
+    @app.post("/servers/{name}/mcp")
+    async def post(name: str, request: Request):
+        hub = _hub(name)
+        if hub is None:
+            return _rpc_error(None, -32004, f"unknown upstream {name!r}", 404)
+        return await _handle_post(hub, request)
+
+    @app.get("/servers/{name}/mcp")
+    async def get(name: str, request: Request):
+        hub = _hub(name)
+        if hub is None:
+            return _rpc_error(None, -32004, f"unknown upstream {name!r}", 404)
+        return await _handle_get(hub, request)
+
+    @app.delete("/servers/{name}/mcp")
+    async def delete(name: str, request: Request):
+        hub = _hub(name)
+        if hub is None:
             return Response(status_code=404)
-        return Response(status_code=204)
+        return await _handle_delete(hub, request)
 
-    def _json_line(line: str, headers: dict[str, str] | None = None):
-        import json as _json
-        return JSONResponse(content=_json.loads(line), headers=headers or {})
-
-    def _rpc_error(request_id: Any, code: int, message: str, status: int):
-        return JSONResponse(
-            content=error_response(request_id, code, message), status_code=status
-        )
+    @app.get("/servers")
+    async def list_servers() -> dict[str, Any]:
+        return {"servers": sorted(hubs)}
 
     return app

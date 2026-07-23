@@ -216,11 +216,12 @@ Split into 5a–5d; work strictly in order, finish + verify each before the next
 - [x] Per-session audit recorder over a shared spool via `_NonClosingSink` (no cross-session `session_id` bleed; shared spool closed once at app shutdown); fail-closed on unknown/missing session id (404/400)
 - [x] Tests: in-process ASGI via httpx ASGITransport with a fake upstream — initialize handshake + session id, allowed call reaches upstream, blocked call returns the policy-denied error (never reaches upstream), tools/list filtered, unknown session 404, missing session 400, notification 202, DELETE terminates, session isolation, gateway timeout (10 new; 263 total green, ruff clean)
 
-### Phase 5b — Multi-upstream routing + `mcp-gateway serve --config`
+### Phase 5b — Multi-upstream routing + `mcp-gateway serve --config` ✅ DONE (2026-07-23)
 
-- [ ] `/servers/<name>/mcp` routing, each bound to its own policy pack + engine; per-upstream supervision/backoff
-- [ ] `gateway.yaml` config (upstreams, policies, state backend, console) + loader; `mcp-gateway serve --config gateway.yaml`
-- [ ] Tests: two upstreams policed by different policies on one app; config load + validation
+- [x] `create_central_app(hubs)` — `/servers/<name>/mcp` routing, each name bound to its own `StreamableHttpGateway` (policy pack + session registry); per-endpoint isolation (a session id belongs to one upstream); `GET /servers` lists them; unknown upstream → 404 (`-32004`). Shared POST/GET/DELETE handlers factored so single- and multi-upstream apps differ only in routing
+- [x] `central/config.py` — `GatewayConfig` + `load_gateway_config` (YAML/JSON, fail-closed validation: non-empty upstreams, unique names, command/policy shape, supported state backend) + `build_central_app(config, upstream_factory=…)` (each upstream → engine + RedactionService + deny-broker, shared spool; upstream factory injectable for tests). `gateway.example.yaml` added
+- [x] `mcp-gateway serve --config gateway.yaml [--host --port]` (in the `[server]` extra; lazy import, clear error without it)
+- [x] Tests: 14 new — config load/defaults/JSON/validation (parametrized fail-closed cases), multi-upstream routing polices each by its own policy, cross-upstream session isolation, unknown upstream, config→app assembly with injected fakes. Verified live: `serve` in front of `demo/mock_server.py` — session handshake, policy-filtered `tools/list`, and **PII-redacted** `crm.get_customer` result (central polices identically to sidecar; audit holds counts only). 277 total green, ruff clean
 
 ### Phase 5c — Redis / Postgres state (honor the SessionStore seam)
 
