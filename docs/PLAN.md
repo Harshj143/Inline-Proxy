@@ -9,7 +9,7 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–3 COMPLETE + configurable failure posture (2026-07-19). Next: Phase 4 — Console v2.**
+**➡️ You are here: Phases 0–4 COMPLETE (Phase 4 — Console v2, 2026-07-23). Next: Phase 5 — Streamable HTTP transport + central mode.**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -162,16 +162,50 @@ human approvals + behavioral monitoring, all feeding one risk score.
 
 ## Phase 4 — Console v2 (size: M)
 
-- [ ] FastAPI app (`[server]` extra): REST + OpenAPI — sessions, events, policy, approvals, backtest
-- [ ] SQLite (WAL) index store fed from the spool; rebuildable (`mcp-gateway audit reindex`)
-- [ ] SSE live feed with `Last-Event-ID` resume; approvals UI; sessions + replay; policy view
-- [ ] `mcp-gateway policy backtest --audit <log>` in core CLI; console backtest panel calls the same engine
-- [ ] Console authn (session cookie against local users now; OIDC later), read-only vs approver roles
+**➡️ You are here (2026-07-23): Phase 4 in progress. Split into 4a/4b/4c below.**
 
-**Exit criteria:** console_demo flow works browser-first (live feed, click-to-approve,
-replay); `curl` against the OpenAPI spec covers every console feature.
+Split rationale: 4a is pure stdlib (sqlite3) and fully unit-testable with no
+server dependency, so it lands first and the whole console reads from it. 4b
+adds the FastAPI app (`[server]` extra) over that index. 4c is the browser UI.
+Each sub-phase is finished + verified (tests green, ruff clean, PLAN updated)
+before the next starts.
 
-## Phase 5 — Streamable HTTP transport + central mode (size: L)
+### Phase 4a — Audit index + backtest (no server dep) ✅ DONE (2026-07-23)
+
+- [x] `audit/reader.py` — tolerant JSONL spool reader (skips a torn final line, bad lines counted not fatal; byte offset per record = `Last-Event-ID`)
+- [x] `audit/index.py` — SQLite (WAL) index store fed from the spool: `events` table (PK = spool byte offset), derived `sessions` roll-up, `meta` watermark; incremental catch-up (idempotent) + full rebuild
+- [x] `mcp-gateway audit reindex --audit <log> --index <db> [--incremental]` — rebuild/catch up the index from the spool
+- [x] Query layer (`AuditIndex.query_events`, `list_sessions`, `session_detail`, `approval_history`, `counts_by_event`) — the REST surface reads through this (live *pending* approvals are held in the 4b server, not the audit index)
+- [x] `policy/backtest.py` — replay recorded tool calls through a (possibly new) policy, diff the action decisions vs what was recorded (blast-radius); tool+role granularity (audit is counts-only, so no argument-level constraint replay); collapses identical calls, flags the block stage for honesty
+- [x] `mcp-gateway policy backtest --audit <log> --policy <new> [--json]` in the core CLI
+- [x] Tests: reader torn-line tolerance, index build/rebuild/incremental, query layer, backtest diff (20 new; 217 total green, ruff clean)
+
+### Phase 4b — FastAPI app (`[server]` extra) ✅ DONE (2026-07-23)
+
+- [x] `console/app.py` — FastAPI app factory (`create_app`); REST + OpenAPI over the index: sessions, session detail (with replay events), events (filter + cursor), stats, policy, backtest. Index refreshed on demand per request (catch-up from spool watermark)
+- [x] SSE live feed (`/api/stream`) tailing the spool; `Last-Event-ID` resume (query or header) as an *exclusive* offset cursor; `once=true` mode for deterministic testing
+- [x] Approvals endpoint implementing the `channels/http.py` contract: gateway POSTs `ApprovalRequest.to_wire()` to `/api/approvals`, BLOCKS until a human decides (`console/approvals.py` live `ApprovalQueue` of asyncio futures, fail-closed on timeout); `{approved, approver, note}` response. `GET /api/approvals/pending` + `POST /api/approvals/{id}/resolve` for the UI
+- [x] Cookie-session authn against local users (`console/auth.py`): PBKDF2 password hashes, HMAC-signed session cookie with expiry, `viewer` vs `approver` roles; resolve requires `approver`; optional shared token guards the gateway-facing approvals POST
+- [x] `mcp-gateway console serve` CLI + `console hash-password` helper (in the `[server]` extra; lazy import with a clear error when absent). fastapi/uvicorn already declared in extras; httpx added as a test dep
+- [x] Tests: TestClient over REST + OpenAPI, SSE resume (query + header, exclusive), approvals round-trip + blocking (httpx ASGI single-loop) + timeout, authn/role gating (31 new: auth 8, queue 4, api 18 + module skips without the extra). 248 passed / 4 skipped, ruff clean
+
+### Phase 4c — Browser console UI ✅ DONE (2026-07-23)
+
+- [x] Static SPA (vanilla JS/CSS, no framework — served by FastAPI from `console/static/`, packaged via `package-data`): live feed (`EventSource`, native Last-Event-ID resume), click-to-approve, session list + replay, policy view, backtest panel with blast-radius chips
+- [x] Login page (cookie session); approver-only approve controls (server-enforced too); `create_app(static_dir=...)` can disable the UI for an API-only deployment
+- [x] e2e (`tests/e2e/test_console_approval.py`): the REAL gateway `ApprovalBroker` + `HttpChannel` block against a uvicorn-served console and are resolved through the approver API (+ fail-closed on timeout). Manually verified: `curl` login → sessions → session replay → SSE `once` → OpenAPI (13 paths) all green against a live `console serve`
+
+**Exit criteria: MET.** Browser-first flow works (SPA live feed via SSE,
+click-to-approve through the real HttpChannel contract, session replay);
+`curl`/urllib against the OpenAPI spec covers every console feature. 253 tests
+green (52 new across 4a/4b/4c), ruff clean.
+
+**Phase 4 COMPLETE (2026-07-23).** REST + OpenAPI console over a rebuildable
+SQLite audit index, SSE live feed with resume, human approvals implementing the
+gateway's HTTP contract, cookie authn with viewer/approver roles, policy view,
+and a policy backtester (CLI + panel) sharing one engine.
+
+## Phase 5 — Streamable HTTP transport + central mode (size: L) ⬅️ NEXT
 
 - [ ] `transports/streamable_http.py` — MCP Streamable HTTP endpoint, `Mcp-Session-Id`, SSE streams
 - [ ] Multi-upstream routing: `/servers/<name>/mcp` bound to pack + policy; per-upstream supervision/backoff

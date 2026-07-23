@@ -1,8 +1,8 @@
 """The `mcp-gateway` command-line interface.
 
 Phase 1 ships `wrap`, `version`, and the `policy` subcommands (validate,
-show, test). `serve`, `init`, and `add` arrive in their phases
-(docs/PLAN.md).
+show, test). Phase 4a adds `policy backtest` and `audit reindex` (the console's
+read model). `serve`, `init`, and `add` arrive in their phases (docs/PLAN.md).
 
 Usage:
     mcp-gateway wrap --policy base.yaml --policy override.yaml -- \
@@ -10,6 +10,8 @@ Usage:
     mcp-gateway policy validate policies/*.yaml
     mcp-gateway policy show --policy base.yaml --policy override.yaml
     mcp-gateway policy test --policy pack.yaml --tests pack.tests.yaml
+    mcp-gateway policy backtest --policy new.yaml --audit audit.log
+    mcp-gateway audit reindex --audit audit.log --index audit.db
 """
 
 from __future__ import annotations
@@ -146,6 +148,39 @@ def _build_parser() -> argparse.ArgumentParser:
     test.add_argument("--policy", action="append", required=True, metavar="FILE")
     test.add_argument("--tests", required=True, metavar="FILE")
 
+    backtest = policy_sub.add_parser(
+        "backtest",
+        help="replay recorded calls from an audit log through a policy (blast radius)",
+        description=(
+            "Re-evaluate every tool call recorded in an audit spool against a "
+            "candidate policy and report what would be decided differently. "
+            "Action-level: argument constraints, taint/sequence, and approvals "
+            "are not replayed (the audit log is counts-only)."
+        ),
+    )
+    backtest.add_argument("--policy", action="append", required=True, metavar="FILE")
+    backtest.add_argument("--audit", required=True, metavar="FILE",
+                          help="audit spool (JSONL) whose recorded calls are replayed")
+    backtest.add_argument("--json", action="store_true", help="machine-readable output")
+
+    audit = sub.add_parser("audit", help="build and inspect the audit index")
+    audit_sub = audit.add_subparsers(dest="audit_command", required=True)
+    reindex = audit_sub.add_parser(
+        "reindex",
+        help="rebuild the SQLite audit index from the JSONL spool",
+        description=(
+            "The index is a disposable read model derived from the spool (the "
+            "source of truth). By default it rebuilds from scratch; --incremental "
+            "only ingests spool records written since the last run."
+        ),
+    )
+    reindex.add_argument("--audit", default="audit.log", metavar="FILE",
+                         help="audit spool path (JSONL)")
+    reindex.add_argument("--index", default="audit.db", metavar="FILE",
+                         help="SQLite index path (created if absent)")
+    reindex.add_argument("--incremental", action="store_true",
+                         help="catch up from the stored watermark instead of a full rebuild")
+
     redact = sub.add_parser(
         "redact",
         help="redact text/JSON through a profile, or print accuracy metrics",
@@ -178,6 +213,39 @@ def _build_parser() -> argparse.ArgumentParser:
     detok.add_argument("--principal", default="local",
                        help="who is performing the detokenization (audited)")
     detok.add_argument("token", metavar="TOKEN")
+
+    console = sub.add_parser(
+        "console",
+        help="run the Security Ops Console (needs the [server] extra)",
+    )
+    console_sub = console.add_subparsers(dest="console_command", required=True)
+    serve = console_sub.add_parser(
+        "serve",
+        help="serve the console REST API + live feed over an audit index/spool",
+    )
+    serve.add_argument("--index", default="audit.db", metavar="FILE",
+                       help="SQLite audit index (rebuilt on demand from the spool)")
+    serve.add_argument("--audit", default="audit.log", metavar="FILE",
+                       help="audit spool path (JSONL) — source of truth")
+    serve.add_argument("--users", required=True, metavar="FILE",
+                       help="YAML/JSON of console users (username, role, password_hash)")
+    serve.add_argument("--policy", action="append", metavar="FILE",
+                       help="policy file(s) to expose in the policy view + backtest")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--secret-env", default="MCPG_CONSOLE_SECRET", metavar="VAR",
+                       help="env var holding the cookie-signing secret "
+                       "(random per-process if unset — sessions won't survive restart)")
+    serve.add_argument("--gateway-token-env", default=None, metavar="VAR",
+                       help="env var holding a shared token required on POST /api/approvals")
+    serve.add_argument("--approval-timeout", type=float, default=300.0, metavar="SECONDS")
+
+    hashpw = console_sub.add_parser(
+        "hash-password",
+        help="print a PBKDF2 hash for a console user's password (reads stdin)",
+    )
+    hashpw.add_argument("--password", default=None,
+                        help="password to hash; omit to read one line from stdin")
 
     sub.add_parser("version", help="print the gateway version")
     return parser
@@ -324,6 +392,116 @@ def _run_policy_test(ns: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _run_policy_backtest(ns: argparse.Namespace) -> int:
+    from mcp_gateway.policy.backtest import backtest_policy, format_report
+
+    engine = PolicyEngine.load(ns.policy)
+    report = backtest_policy(ns.audit, engine)
+    if ns.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(format_report(report))
+    # A backtest is a report, not a gate; exit 0 even when calls would flip.
+    return 0
+
+
+def _run_audit_reindex(ns: argparse.Namespace) -> int:
+    from mcp_gateway.audit.index import AuditIndex
+
+    with AuditIndex(ns.index) as index:
+        stats = index.catch_up(ns.audit) if ns.incremental else index.rebuild(ns.audit)
+    verb = "caught up" if ns.incremental else "rebuilt"
+    print(
+        f"{verb} {ns.index} from {ns.audit}: "
+        f"{stats['inserted']} event(s) indexed, next_offset={stats['next_offset']}"
+    )
+    if stats["bad_lines"]:
+        print(f"  warning: {stats['bad_lines']} unparseable line(s) skipped",
+              file=sys.stderr)
+    if stats["torn_tail"]:
+        print("  note: a torn final line was skipped (writer still appending)",
+              file=sys.stderr)
+    return 0
+
+
+def _load_users_file(path: str):
+    from mcp_gateway.console.auth import LocalUsers
+
+    document = _load_config_file_generic(path)
+    if isinstance(document, dict) and "users" in document:
+        document = document["users"]
+    if not isinstance(document, list):
+        raise GatewayError(f"{path}: expected a list of users (or a 'users:' key)")
+    try:
+        return LocalUsers(document)
+    except ValueError as exc:
+        raise GatewayError(f"{path}: {exc}") from None
+
+
+def _load_config_file_generic(path: str):
+    import yaml
+
+    text = Path(path).read_text()
+    return json.loads(text) if path.endswith(".json") else yaml.safe_load(text)
+
+
+def _run_console_serve(ns: argparse.Namespace) -> int:
+    import os
+
+    try:
+        import uvicorn
+
+        from mcp_gateway.console.app import create_app
+        from mcp_gateway.console.auth import CookieSigner
+    except ModuleNotFoundError:
+        raise GatewayError(
+            "the console needs the [server] extra: pip install 'mcp-gateway[server]'"
+        ) from None
+
+    users = _load_users_file(ns.users)
+    if len(users) == 0:
+        raise GatewayError(f"{ns.users}: no users defined — the console would be unusable")
+
+    secret = os.environ.get(ns.secret_env)
+    if secret:
+        signer = CookieSigner(secret.encode("utf-8"))
+    else:
+        import secrets as _secrets
+
+        signer = CookieSigner(_secrets.token_bytes(32))
+        print(
+            f"mcp-gateway console: ${ns.secret_env} unset — using a random cookie "
+            f"secret; sessions will not survive a restart.",
+            file=sys.stderr,
+        )
+
+    engine = PolicyEngine.load(ns.policy) if ns.policy else None
+    gateway_token = os.environ.get(ns.gateway_token_env) if ns.gateway_token_env else None
+
+    app = create_app(
+        index_path=ns.index,
+        spool_path=ns.audit,
+        users=users,
+        signer=signer,
+        policy_engine=engine,
+        approval_timeout=ns.approval_timeout,
+        gateway_token=gateway_token,
+    )
+    uvicorn.run(app, host=ns.host, port=ns.port)
+    return 0
+
+
+def _run_console_hash_password(ns: argparse.Namespace) -> int:
+    from mcp_gateway.console.auth import hash_password
+
+    password = ns.password if ns.password is not None else sys.stdin.readline().rstrip("\n")
+    if not password:
+        print("mcp-gateway: empty password", file=sys.stderr)
+        return 2
+    print(hash_password(password))
+    return 0
+
+
 def _run_redact(ns: argparse.Namespace) -> int:
     from mcp_gateway.redaction import build_engine
     from mcp_gateway.redaction.eval import evaluate, format_report
@@ -396,6 +574,15 @@ def main(argv: list[str] | None = None) -> int:
                 return _run_policy_show(ns)
             if ns.policy_command == "test":
                 return _run_policy_test(ns)
+            if ns.policy_command == "backtest":
+                return _run_policy_backtest(ns)
+        if ns.command == "audit" and ns.audit_command == "reindex":
+            return _run_audit_reindex(ns)
+        if ns.command == "console":
+            if ns.console_command == "serve":
+                return _run_console_serve(ns)
+            if ns.console_command == "hash-password":
+                return _run_console_hash_password(ns)
         if ns.command == "redact":
             return _run_redact(ns)
         if ns.command == "version":

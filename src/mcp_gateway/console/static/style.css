@@ -1,0 +1,76 @@
+/* Security Ops Console — minimal, dependency-free styling.
+   Dark by default (ops dashboards live on wall displays); readable, dense. */
+:root {
+  --bg: #0f1419; --panel: #171d25; --line: #263039; --fg: #d6dde5;
+  --muted: #8b97a5; --accent: #4aa3ff; --ok: #3fb950; --warn: #d29922;
+  --bad: #f85149; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 system-ui, sans-serif; }
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.error { color: var(--bad); }
+button { cursor: pointer; font: inherit; }
+button.link { background: none; border: none; color: var(--accent); padding: 0; }
+
+/* Login */
+.login { min-height: 100vh; display: grid; place-items: center; }
+.card { background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 28px; width: 320px; display: flex;
+  flex-direction: column; gap: 12px; }
+.card h1 { margin: 0; font-size: 18px; }
+.card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+  color: var(--muted); }
+.card input, textarea { background: #0b0e12; border: 1px solid var(--line);
+  color: var(--fg); border-radius: 6px; padding: 8px; font: inherit; }
+.card button[type=submit], #backtest-run, .approve {
+  background: var(--accent); color: #001; border: none; border-radius: 6px;
+  padding: 9px; font-weight: 600; }
+.deny { background: var(--bad); color: #fff; border: none; border-radius: 6px;
+  padding: 7px 10px; }
+
+/* Chrome */
+header { display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+header .spacer { flex: 1; }
+nav#tabs { display: flex; gap: 4px; }
+nav#tabs button { background: none; border: 1px solid transparent; color: var(--muted);
+  padding: 6px 12px; border-radius: 6px; }
+nav#tabs button.active { color: var(--fg); background: var(--bg); border-color: var(--line); }
+.badge { background: var(--warn); color: #001; border-radius: 10px; padding: 0 7px;
+  font-size: 11px; font-weight: 700; }
+main { padding: 16px; }
+.toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px;
+  border-bottom: 1px solid var(--line); padding: 6px 8px; }
+td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr.clickable:hover { background: var(--panel); cursor: pointer; }
+.events td { font-family: var(--mono); font-size: 12.5px; }
+.ev { font-weight: 600; }
+.ev-allowed, .tag-allowed { color: var(--ok); }
+.ev-blocked, .tag-blocked, .ev-suspended { color: var(--bad); }
+.ev-tainted, .tag-redact { color: var(--warn); }
+.ev-approval { color: var(--accent); }
+.ts { color: var(--muted); }
+
+/* Split (sessions) */
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.detail { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px; min-height: 200px; }
+.detail pre, #policy-view pre, #backtest-result pre { white-space: pre-wrap;
+  word-break: break-word; font-family: var(--mono); font-size: 12px; margin: 0; }
+
+/* Approvals */
+.approval { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 14px; margin-bottom: 10px; }
+.approval .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.approval input { flex: 1; }
+.approval .tool { font-family: var(--mono); font-weight: 600; }
+
+textarea { width: 100%; min-height: 130px; }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
+  border: 1px solid var(--line); margin-right: 4px; }
