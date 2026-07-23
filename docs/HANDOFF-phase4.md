@@ -5,88 +5,108 @@ _Rewritten from scratch each chunk. Last update: 2026-07-23._
 Branch: `feat/console-v2` (never commit to `main`). Draft PR to `main`:
 "Phase 4: Console v2" (open it after the first push if none exists; never merge).
 
-## Environment note (IMPORTANT for the next run)
-The repo requires Python **>=3.12** but the container's default `python3` is
-**3.11**, and `pip install` is PEP-668 externally-managed. Use a venv built
-with 3.12:
+## ⚠️ PUSH IS CURRENTLY BLOCKED (read this first)
+As of 2026-07-23 this session's GitHub integration has **read access but no
+write permission** on `Harshj143/Inline-Proxy`:
+- `git push` → `403 Forbidden` at `git-receive-pack` (the origin rejects it via the relay).
+- GitHub API `create_branch` / `push_files` → `403 Resource not accessible by integration`.
 
+So the remote branch `feat/console-v2` **does not exist yet** and none of this work
+is pushed. All Phase 4a + 4b work is committed **locally** on `feat/console-v2`.
+The container is ephemeral — if write access is not granted, this is lost.
+
+**Action needed from a human:** grant the Claude/GitHub integration write
+(contents + workflows) access to `Harshj143/Inline-Proxy`. Once granted, retry:
+`git push -u origin feat/console-v2` (it should carry all local commits), then
+open the draft PR. A notification was sent to the user describing this.
+
+## Environment note (IMPORTANT for the next run)
+Repo requires Python **>=3.12** but the container default `python3` is **3.11**
+and pip is PEP-668 externally-managed. Use a 3.12 venv:
 ```
 python3.12 -m venv .venv
-.venv/bin/pip install -e '.[vault]' pytest ruff pyyaml
+.venv/bin/pip install -e '.[server,vault]' pytest ruff pyyaml httpx
 ```
-
 Quality gate (run before every commit):
 ```
-PYTHONPATH=src .venv/bin/python -m pytest tests/ -q      # 217 passed, 4 skipped
-.venv/bin/python -m ruff check src tests                 # All checks passed!
+PYTHONPATH=src .venv/bin/python -m pytest tests/ -q   # 248 passed, 4 skipped
+.venv/bin/python -m ruff check src tests              # All checks passed!
 ```
+Note: without the `[server]` extra, `tests/unit/test_console_api.py` skips
+(module-level `importorskip("fastapi")`), while `test_console_auth.py` and
+`test_console_approvals.py` (pure stdlib) still run. That is intended.
 
 ## Done
-- **Phase 4a COMPLETE** — audit index + backtest, pure stdlib, no server dep.
-  - `src/mcp_gateway/audit/reader.py` — tolerant JSONL spool reader. `read_spool(path, start=0)`
-    returns `ReadResult(records, next_offset, bad_lines, torn_tail)`; each `SpoolRecord`
-    carries `offset`/`end_offset` (byte offsets) — the offset is the `Last-Event-ID`.
-    Torn final line (no newline) is left for a later read; bad complete lines counted, not fatal.
-  - `src/mcp_gateway/audit/index.py` — `AuditIndex(db_path)`. SQLite WAL. `events` table keyed
-    on spool byte offset (`INSERT OR IGNORE` → idempotent catch-up), derived `sessions` roll-up,
-    `meta.next_offset` watermark. Methods: `rebuild(spool)`, `catch_up(spool)`, `query_events(...)`,
-    `get_event(offset)`, `latest_offset()`, `list_sessions()`, `session_detail(sid)`,
-    `approval_history()`, `counts_by_event()`. Context manager (`with AuditIndex(...) as ix`).
-  - `src/mcp_gateway/policy/backtest.py` — `backtest_policy(audit_path, engine, deny_set=None)`
-    → `BacktestReport`. Replays recorded `tool_call_allowed`/`tool_call_blocked` calls through a
-    policy, diffs action + allow/deny disposition. Collapses identical (tool,role,outcome) rows to
-    a `count`. **Action-level only** — constraints/taint/sequence/approval are NOT replayed
-    (audit is counts-only); blocked calls keep `old_stage` so a reviewer sees when a "newly_allowed"
-    line was originally a constraint/sequence denial. `format_report()` for the CLI.
-  - CLI (`src/mcp_gateway/cli/__init__.py`): `mcp-gateway audit reindex --audit <log> --index <db>
-    [--incremental]` and `mcp-gateway policy backtest --policy <f> --audit <log> [--json]`.
-  - Tests: `tests/unit/test_audit_reader.py`, `test_audit_index.py`, `test_backtest.py` (20 new).
+- **Phase 4a COMPLETE** (committed): `audit/reader.py` (tolerant JSONL reader,
+  byte-offset = Last-Event-ID), `audit/index.py` (SQLite WAL read model keyed on
+  offset, sessions roll-up, watermark, rebuild/catch-up, query layer),
+  `policy/backtest.py` (action-level blast-radius diff), CLI `audit reindex` +
+  `policy backtest`. 20 tests.
+- **Phase 4b COMPLETE** (committed): the FastAPI console over 4a.
+  - `console/auth.py` — `hash_password`/`verify_password` (PBKDF2), `LocalUsers`
+    (from config: `password` plaintext dev-only OR `password_hash`; roles
+    `viewer`/`approver`), `CookieSigner` (HMAC-signed cookie w/ expiry, fails
+    closed on tamper/expiry). Pure stdlib.
+  - `console/approvals.py` — `ApprovalQueue`: `submit()` parks an asyncio Future,
+    `wait(timeout)` blocks and fails closed on timeout, `resolve()` completes it
+    (idempotent), `pending()` for the UI. Live state, evaporates on restart by design.
+  - `console/app.py` — `create_app(index_path, spool_path, users, signer, ...)`.
+    Routes: `POST /api/login|logout`, `GET /api/me`, `GET /api/sessions`,
+    `GET /api/sessions/{id}` (with chronological replay events), `GET /api/events`
+    (filters + `after` cursor), `GET /api/stats`, `GET /api/policy`,
+    `POST /api/backtest`, `GET /api/stream` (SSE, `Last-Event-ID` exclusive resume,
+    `once=` for tests), `POST /api/approvals` (gateway contract, blocks),
+    `GET /api/approvals/pending`, `POST /api/approvals/{id}/resolve` (approver-only).
+    **This module intentionally does NOT use `from __future__ import annotations`**
+    and imports FastAPI/Pydantic at module top — FastAPI resolves annotations at
+    decoration time and stringised/late-bound ones get misread as query params
+    (verified failure mode with fastapi 0.139). The module is `[server]`-gated so
+    that's safe. Models `LoginBody`/`ResolveBody`/`BacktestBody` are module-level.
+  - CLI: `mcp-gateway console serve --index --audit --users [--policy --host --port
+    --secret-env --gateway-token-env --approval-timeout]` and
+    `mcp-gateway console hash-password`. Lazy import; clear error without the extra.
+  - `pyproject.toml`: ruff `flake8-bugbear.extend-immutable-calls` for
+    `fastapi.Depends`/`fastapi.Query` (the DI idiom); httpx added to the `dev` extra.
+  - Tests: `test_console_auth.py` (8), `test_console_approvals.py` (4),
+    `test_console_api.py` (18, gated on the extra). The blocking approval round-trip
+    uses `httpx.AsyncClient` + ASGI transport on ONE event loop (TestClient serialises
+    through one portal and would deadlock on a blocking request + its resolver).
 
 ## In progress
-- Nothing mid-flight. 4a is committed + pushed and green.
+- Nothing mid-flight. 4a + 4b are committed locally and green. Only the push is blocked.
 
-## Exact next steps — start Phase 4b (FastAPI app, `[server]` extra)
-1. `pyproject.toml` already declares `server = ["fastapi>=0.111", "uvicorn>=0.30"]`. Install it in
-   the venv: `.venv/bin/pip install -e '.[server,vault]'`. Add `httpx` (FastAPI TestClient needs
-   it) to a `dev`/test path or just `pip install httpx` in the venv for tests. If you introduce any
-   new runtime dep for the server, declare it in the `[server]` extra — keep the core install clean.
-2. `src/mcp_gateway/console/` new package:
-   - `app.py` — `create_app(index_path, spool_path, users=...) -> FastAPI`. REST over `AuditIndex`:
-     `GET /api/sessions`, `GET /api/sessions/{id}`, `GET /api/events`, `GET /api/policy`
-     (serve `PolicyEngine.describe()`), `POST /api/backtest`. OpenAPI is automatic.
-   - SSE `GET /api/stream` — tail the spool via `read_spool(path, start=Last-Event-ID)`, emit
-     `id: <offset>` per event so `Last-Event-ID` resume works. Reuse the reader; poll the file.
-   - Approvals: implement the **existing gateway contract** — the gateway's `HttpChannel`
-     (`src/mcp_gateway/approvals/channels/http.py`) POSTs `ApprovalRequest.to_wire()` JSON to
-     `POST {base_url}/api/approvals` and **blocks** until a human decides; respond
-     `{"approved": bool, "approver": str, "note": str}`. So the console holds a **live in-memory
-     pending queue**: `/api/approvals` (from the gateway) parks a future; `GET /api/approvals/pending`
-     lists them for the UI; `POST /api/approvals/{request_id}/resolve` (approver role) completes the
-     future and unblocks the gateway. Use an `asyncio.Future` per pending request + a timeout.
-   - `auth.py` — cookie session against local users (dict of user→{password_hash, role}); roles
-     `viewer` (read-only) and `approver`. Approve endpoints require `approver`. Keep it stdlib-simple
-     (signed cookie via `hmac`, or FastAPI dependency) — no new heavy dep.
-   - CLI: `mcp-gateway console serve --index <db> --audit <log> [--host --port --users <file>]`,
-     guarded by a friendly error if `[server]` isn't installed (import fastapi lazily, like the
-     redaction/anomaly extras are handled).
-3. Tests (`tests/console/` or `tests/unit/test_console_*.py`): FastAPI `TestClient` over REST +
-   `/openapi.json`; SSE resume from a `Last-Event-ID`; approvals round-trip (POST parks, resolve
-   unblocks, returns the decision) + blocking/timeout; authn + role gating (viewer can't approve).
-   Gate the whole module behind `pytest.importorskip("fastapi")` so the suite still passes without
-   the extra (mirror how `test_redaction_presidio.py` skips).
+## Exact next steps
+1. **If push access is now granted:** `git push -u origin feat/console-v2`, then open
+   the draft PR "Phase 4: Console v2" (`create_pull_request` with `draft: true`, base
+   `main`). Subscribe to it. THEN start 4c.
+2. **Phase 4c — browser console UI** (`console/static/`, served by FastAPI):
+   - Serve static assets + an index page from `create_app` (mount `StaticFiles` or a
+     couple of routes returning HTML; keep it vanilla JS — minimal-dependency ethos).
+   - Login page (POST /api/login, cookie set automatically). Show role; hide approve
+     controls for `viewer`.
+   - Live feed: `EventSource('/api/stream')`, render events; reconnect uses the browser's
+     native Last-Event-ID.
+   - Approvals: poll/subscribe pending, click-to-approve → `POST /resolve` (approver only).
+   - Sessions list + click → session detail replay (`GET /api/sessions/{id}` events).
+   - Policy view (`GET /api/policy`) and a backtest panel (`POST /api/backtest` with a
+     pasted policy doc) rendering the blast-radius report.
+3. **Exit-criteria e2e** (the phase gate): a real end-to-end demo wiring the gateway's
+   actual `HttpChannel` (`approvals/channels/http.py`) to a running console: `mcp-gateway
+   wrap --approvals http --approvals-url http://localhost:PORT ... ` → a require_approval
+   tool blocks → approve in the console → call proceeds. And a `curl` script exercising
+   every REST endpoint against the OpenAPI spec. Add as `tests/e2e/test_console_*.py`
+   (spin uvicorn on an ephemeral port in a thread) or a `docs/` demo script.
 
 ## Gotchas / decisions made
-- **Audit is counts-only**: the spool never stores tool arguments or session state. That's why the
-  backtest is action-level and the index stores no payloads — don't try to reconstruct arguments.
-- **Offset = event id**: everything (index PK, SSE Last-Event-ID, backtest cursor) keys on the spool
-  byte offset from `reader.py`. Keep using it; don't add a second sequence counter.
-- **`denying_actions()`** returns `{block, redact, require_approval}` by default (redact/approval are
-  deny-only unless a service is wired). The backtest uses that set for new-outcome disposition and
-  lets callers override via `deny_set` (a deployment wiring redaction should pass a narrower set).
-  The 4b `/api/backtest` should expose that too.
-- **Pending approvals are live, not from audit** — the audit log only ever sees an approval *after*
-  a human decided (`approval_requested` with `approved=`). The pending queue lives in the 4b server.
-- Sub-phase discipline: finish + verify 4b fully (tests green, ruff clean, PLAN + this file updated,
-  push) before starting 4c (browser UI).
-- Python 3.12 venv is mandatory (see Environment note). `python3` alone is 3.11 and will refuse the
-  editable install.
+- **Audit is counts-only**: spool stores no arguments/session state — that's why the
+  index stores no payloads and the backtest is action-level. Don't try to reconstruct args.
+- **Offset = event id** everywhere (index PK, SSE Last-Event-ID exclusive cursor, backtest).
+- **`denying_actions()`** = `{block, redact, require_approval}` by default. Backtest +
+  `POST /api/backtest` accept a `deny_set` override for deployments that wire redaction/approval.
+- **Pending approvals are live, not audit** — the queue lives in the running console and is
+  lost on restart (an in-flight call then fails closed via the gateway broker deadline).
+- **FastAPI version quirk**: `from __future__ import annotations` breaks body-param detection
+  in this env; console/app.py deliberately omits it (see Done). Don't "fix" it back.
+- **TestClient can't do the blocking approval test** — use httpx AsyncClient on one loop.
+- Sub-phase discipline: finish + verify 4c fully (tests green, ruff clean, PLAN + this file
+  updated, push) before declaring Phase 4 done and moving the marker to Phase 5.

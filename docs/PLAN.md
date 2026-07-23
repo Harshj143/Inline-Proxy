@@ -180,14 +180,14 @@ before the next starts.
 - [x] `mcp-gateway policy backtest --audit <log> --policy <new> [--json]` in the core CLI
 - [x] Tests: reader torn-line tolerance, index build/rebuild/incremental, query layer, backtest diff (20 new; 217 total green, ruff clean)
 
-### Phase 4b — FastAPI app (`[server]` extra)
+### Phase 4b — FastAPI app (`[server]` extra) ✅ DONE (2026-07-23)
 
-- [ ] `console/app.py` — FastAPI app factory; REST + OpenAPI over the index: sessions, events, policy, backtest
-- [ ] SSE live feed (`/api/stream`) tailing the spool, `Last-Event-ID` resume from the index offset
-- [ ] Approvals endpoint implementing the `channels/http.py` contract: gateway POSTs `ApprovalRequest.to_wire()` to `/api/approvals`, BLOCKS until a human decides; `{approved, approver, note}` response. Pending-queue + resolve endpoints for the UI
-- [ ] Cookie-session authn against local users (`console/auth.py`); read-only vs approver roles; approve requires the approver role
-- [ ] `mcp-gateway console serve` CLI (in the `[server]` extra); declare fastapi/uvicorn already in extras
-- [ ] Tests: TestClient over REST + OpenAPI, SSE resume, approvals round-trip + blocking, authn/role gating
+- [x] `console/app.py` — FastAPI app factory (`create_app`); REST + OpenAPI over the index: sessions, session detail (with replay events), events (filter + cursor), stats, policy, backtest. Index refreshed on demand per request (catch-up from spool watermark)
+- [x] SSE live feed (`/api/stream`) tailing the spool; `Last-Event-ID` resume (query or header) as an *exclusive* offset cursor; `once=true` mode for deterministic testing
+- [x] Approvals endpoint implementing the `channels/http.py` contract: gateway POSTs `ApprovalRequest.to_wire()` to `/api/approvals`, BLOCKS until a human decides (`console/approvals.py` live `ApprovalQueue` of asyncio futures, fail-closed on timeout); `{approved, approver, note}` response. `GET /api/approvals/pending` + `POST /api/approvals/{id}/resolve` for the UI
+- [x] Cookie-session authn against local users (`console/auth.py`): PBKDF2 password hashes, HMAC-signed session cookie with expiry, `viewer` vs `approver` roles; resolve requires `approver`; optional shared token guards the gateway-facing approvals POST
+- [x] `mcp-gateway console serve` CLI + `console hash-password` helper (in the `[server]` extra; lazy import with a clear error when absent). fastapi/uvicorn already declared in extras; httpx added as a test dep
+- [x] Tests: TestClient over REST + OpenAPI, SSE resume (query + header, exclusive), approvals round-trip + blocking (httpx ASGI single-loop) + timeout, authn/role gating (31 new: auth 8, queue 4, api 18 + module skips without the extra). 248 passed / 4 skipped, ruff clean
 
 ### Phase 4c — Browser console UI
 

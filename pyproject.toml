@@ -28,7 +28,7 @@ s3 = ["boto3>=1.34"]                                     # Phase 11: audit sink
 splunk = ["httpx>=0.27"]                                 # Phase 11: HEC sink
 postgres = ["psycopg[binary]>=3.1"]                      # Phase 5: central index store
 redis = ["redis>=5.0"]                                   # Phase 5: shared session state
-dev = ["pytest>=8.0", "ruff>=0.5", "pyright>=1.1"]
+dev = ["pytest>=8.0", "ruff>=0.5", "pyright>=1.1", "httpx>=0.27"]  # httpx: FastAPI TestClient (console tests)
 
 [project.scripts]
 mcp-gateway = "mcp_gateway.cli:main"
@@ -47,6 +47,12 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom puts Depends()/Query() in argument
+# defaults by design; these calls are effectively immutable markers, not the
+# mutable-default footgun B008 targets.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
 
 [tool.pyright]
 include = ["src"]
