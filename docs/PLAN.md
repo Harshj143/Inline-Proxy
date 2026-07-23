@@ -9,7 +9,7 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phase 4 — Console v2 IN PROGRESS (started 2026-07-23). Phases 0–3 COMPLETE + configurable failure posture (2026-07-19).**
+**➡️ You are here: Phases 0–4 COMPLETE (Phase 4 — Console v2, 2026-07-23). Next: Phase 5 — Streamable HTTP transport + central mode.**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -189,15 +189,23 @@ before the next starts.
 - [x] `mcp-gateway console serve` CLI + `console hash-password` helper (in the `[server]` extra; lazy import with a clear error when absent). fastapi/uvicorn already declared in extras; httpx added as a test dep
 - [x] Tests: TestClient over REST + OpenAPI, SSE resume (query + header, exclusive), approvals round-trip + blocking (httpx ASGI single-loop) + timeout, authn/role gating (31 new: auth 8, queue 4, api 18 + module skips without the extra). 248 passed / 4 skipped, ruff clean
 
-### Phase 4c — Browser console UI
+### Phase 4c — Browser console UI ✅ DONE (2026-07-23)
 
-- [ ] Static SPA (vanilla, served by FastAPI — minimal-dependency ethos): live feed, click-to-approve, session list + replay, policy view, backtest panel
-- [ ] Login page (cookie session); approver-only approve controls
+- [x] Static SPA (vanilla JS/CSS, no framework — served by FastAPI from `console/static/`, packaged via `package-data`): live feed (`EventSource`, native Last-Event-ID resume), click-to-approve, session list + replay, policy view, backtest panel with blast-radius chips
+- [x] Login page (cookie session); approver-only approve controls (server-enforced too); `create_app(static_dir=...)` can disable the UI for an API-only deployment
+- [x] e2e (`tests/e2e/test_console_approval.py`): the REAL gateway `ApprovalBroker` + `HttpChannel` block against a uvicorn-served console and are resolved through the approver API (+ fail-closed on timeout). Manually verified: `curl` login → sessions → session replay → SSE `once` → OpenAPI (13 paths) all green against a live `console serve`
 
-**Exit criteria:** console_demo flow works browser-first (live feed, click-to-approve,
-replay); `curl` against the OpenAPI spec covers every console feature.
+**Exit criteria: MET.** Browser-first flow works (SPA live feed via SSE,
+click-to-approve through the real HttpChannel contract, session replay);
+`curl`/urllib against the OpenAPI spec covers every console feature. 253 tests
+green (52 new across 4a/4b/4c), ruff clean.
 
-## Phase 5 — Streamable HTTP transport + central mode (size: L)
+**Phase 4 COMPLETE (2026-07-23).** REST + OpenAPI console over a rebuildable
+SQLite audit index, SSE live feed with resume, human approvals implementing the
+gateway's HTTP contract, cookie authn with viewer/approver roles, policy view,
+and a policy backtester (CLI + panel) sharing one engine.
+
+## Phase 5 — Streamable HTTP transport + central mode (size: L) ⬅️ NEXT
 
 - [ ] `transports/streamable_http.py` — MCP Streamable HTTP endpoint, `Mcp-Session-Id`, SSE streams
 - [ ] Multi-upstream routing: `/servers/<name>/mcp` bound to pack + policy; per-upstream supervision/backoff

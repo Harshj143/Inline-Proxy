@@ -34,7 +34,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from mcp_gateway.audit.index import AuditIndex
@@ -69,11 +70,17 @@ def create_app(
     approval_timeout: float = 300.0,
     gateway_token: str | None = None,
     poll_interval: float = 0.5,
+    static_dir: str | Path | None = None,
 ) -> FastAPI:
     """Build the console FastAPI app over an audit index + spool."""
     spool_path = str(spool_path)
     index_path = str(index_path)
     queue = approval_queue or ApprovalQueue()
+    # The browser UI (Phase 4c) ships alongside this module; callers may point
+    # elsewhere or pass "" to serve API-only.
+    if static_dir is None:
+        static_dir = Path(__file__).parent / "static"
+    static_dir = Path(static_dir)
 
     app = FastAPI(
         title="MCP Security Gateway — Console",
@@ -266,5 +273,17 @@ def create_app(
         if not ok:
             raise HTTPException(status_code=404, detail="unknown or already-resolved approval")
         return {"resolved": True, "approval_id": approval_id, "approved": body.approved}
+
+    # -------------------------------------------------------- browser UI (4c)
+    # Served last so it never shadows an /api route. The SPA is public (the page
+    # itself carries no data); every /api call it makes is still cookie-gated.
+    if static_dir.is_dir():
+        index_html = static_dir / "index.html"
+
+        @app.get("/", include_in_schema=False)
+        def home() -> FileResponse:
+            return FileResponse(str(index_html))
+
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     return app

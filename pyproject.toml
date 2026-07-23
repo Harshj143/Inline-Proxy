@@ -36,6 +36,10 @@ mcp-gateway = "mcp_gateway.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The console's browser UI ships with the package (served by the [server] app).
+"mcp_gateway.console" = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

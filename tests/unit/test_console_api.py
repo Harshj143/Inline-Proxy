@@ -129,6 +129,34 @@ def test_policy_view_404_without_policy(tmp_path):
     assert client.get("/api/policy").status_code == 404
 
 
+def test_home_serves_the_spa(tmp_path):
+    client = TestClient(_app(tmp_path))
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "Security Ops Console" in resp.text
+
+
+def test_static_assets_served(tmp_path):
+    client = TestClient(_app(tmp_path))
+    js = client.get("/static/app.js")
+    assert js.status_code == 200
+    assert "EventSource" in js.text
+    css = client.get("/static/style.css")
+    assert css.status_code == 200
+
+
+def test_static_dir_can_be_disabled(tmp_path):
+    # Passing an empty/missing static dir yields an API-only app (no "/" route).
+    spool = tmp_path / "audit.log"
+    _spool(spool, _events())
+    app = create_app(
+        index_path=str(tmp_path / "audit.db"), spool_path=str(spool),
+        users=LocalUsers([{"username": "a", "role": "viewer", "password": "p"}]),
+        signer=CookieSigner(b"s"), static_dir=tmp_path / "no-such-dir",
+    )
+    assert TestClient(app).get("/").status_code == 404
+
+
 def test_openapi_covers_the_surface(tmp_path):
     client = TestClient(_app(tmp_path))
     spec = client.get("/openapi.json").json()
