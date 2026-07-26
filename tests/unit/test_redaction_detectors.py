@@ -1,5 +1,7 @@
 """Detectors: validators must reject look-alikes and catch real identifiers."""
 
+import pytest
+
 from mcp_gateway.redaction import entities
 from mcp_gateway.redaction.detectors.base import DetectionContext
 from mcp_gateway.redaction.detectors.regex_pii import RegexPiiDetector
@@ -124,3 +126,79 @@ def test_entropy_does_not_double_claim_provider_token():
     ghp = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
     entities_found = [s.entity for s in SECRETS.detect(ghp, CTX)]
     assert entities_found == [entities.GITHUB_TOKEN]
+
+
+# ------------------------------------------------- AWS secret access keys
+# Regression guard: AWS_SECRET_ACCESS_KEY was a registered entity that NO detector
+# emitted, and the high-entropy net that might have caught it sits below the
+# default profile's confidence floor — so an AWS secret key passed through the
+# `standard` profile unredacted. Found by the GitHub-pack e2e (a .env read).
+AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+
+@pytest.mark.parametrize("line", [
+    f"AWS_SECRET_ACCESS_KEY={AWS_SECRET}",
+    f"aws_secret_access_key = {AWS_SECRET}",
+    f'"awsSecretAccessKey": "{AWS_SECRET}"',
+    f"secret_access_key: {AWS_SECRET}",
+])
+def test_aws_secret_access_key_is_detected(line):
+    spans = [s for s in SECRETS.detect(line, CTX)
+             if s.entity == entities.AWS_SECRET_ACCESS_KEY]
+    assert spans, f"missed the AWS secret key in: {line}"
+    # Only the VALUE is claimed — the label stays readable.
+    assert spans[0].text == AWS_SECRET
+
+
+def test_aws_secret_key_needs_its_label():
+    # 40 base64 chars with no AWS-ish label must NOT be called an AWS secret key:
+    # that shape is also every base64 hash, and mislabeling would be a lie.
+    assert entities.AWS_SECRET_ACCESS_KEY not in found_entities(
+        SECRETS, f"checksum {AWS_SECRET}"
+    )
+
+
+def test_aws_secret_survives_the_default_profile():
+    """The actual bug: end-to-end through the DEFAULT profile, not just the detector."""
+    from mcp_gateway.redaction import build_engine
+
+    out, _ = build_engine("standard").redact_text(f"AWS_SECRET_ACCESS_KEY={AWS_SECRET}")
+    assert AWS_SECRET not in out
+
+
+# ------------------------------------------------------- labeled secrets
+def test_labeled_secret_in_text_is_detected():
+    # `hunter2` is shapeless — only the key name reveals it. structured.py does
+    # this for dict keys; this is the text path (MCP results are JSON-in-text).
+    spans = [s for s in SECRETS.detect("DB_PASSWORD=hunter2-not-a-pattern", CTX)
+             if s.entity == entities.SENSITIVE_FIELD]
+    assert spans and spans[0].text == "hunter2-not-a-pattern"
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("password: s3cr3t-value", True),
+    ('"client_secret": "abc12345"', True),
+    ("api_key=abcd1234efgh", True),
+    ("passphrase = correct-horse", True),
+    # Vocabulary shared with structured.py, so its careful non-matches hold:
+    ("token_count: 4096", False),        # an LLM field, not a credential
+    ("authorized_users: alice", False),  # contains "auth", not as a token
+    ("file_path: /vault/records", False),
+])
+def test_labeled_secret_vocabulary_matches_structured_pass(line, expected):
+    hit = entities.SENSITIVE_FIELD in found_entities(SECRETS, line)
+    assert hit is expected, line
+
+
+def test_labeled_detection_can_be_disabled():
+    quiet = SecretsDetector(include_high_entropy=False, include_labeled=False)
+    assert quiet.detect("DB_PASSWORD=hunter2-not-a-pattern", CTX) == []
+
+
+def test_entropy_candidate_does_not_swallow_the_label():
+    # The candidate regex used to match `LABEL=<secret>` as one run, so the
+    # reported span covered the label too. It must start at the value.
+    secret = "0123456789abcdef0123456789abcdef"
+    spans = [s for s in SECRETS.detect(f"OPAQUE_BLOB={secret}", CTX)
+             if s.entity == entities.GENERIC_SECRET]
+    assert spans and spans[0].text == secret

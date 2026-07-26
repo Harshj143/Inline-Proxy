@@ -295,8 +295,28 @@ installed wheel is a Phase 12 packaging task.
 - [x] `tests/unit/test_github_pack.py` — 11 tests incl. **every tool has an explicit
       rule** (no silent default-deny), action⇄risk agreement, bot/destructive
       invariants, inventory-count guard. 342 passed / 5 skipped, ruff clean
+- [x] **E2E acceptance test (2026-07-25):** `tests/e2e/test_wrap_github_attack.py` —
+      poisoned issue read (tainted) → `.env` read (secrets scrubbed) → CI logs
+      (quarantined) → exfil gist **BLOCKED** at the sequence stage → push **BLOCKED**;
+      a containment marker proves no sink ever reached the upstream, and the audit
+      spool is asserted to hold no raw secrets. Run with `--approvals allow` on
+      purpose: the pack's approval gate would have blocked the gist anyway, so
+      auto-approving isolates taint as the control actually doing the work, and
+      `test_clean_session_may_gist` is the paired control. Plus writes-fail-closed,
+      destructive-blocked-for-every-role, and `tools/list` filtering
 - [ ] `constraints.py`: org allowlist, protected branches; rewrites: draft PRs, search caps
-- [ ] E2E demo: poisoned-issue → attempted exfil gist, blocked; recorded as acceptance test
+
+**Security fix found by the e2e (2026-07-25).** The `.env` read leaked an AWS
+**secret** access key through the DEFAULT `standard` profile. Two compounding
+causes: `AWS_SECRET_ACCESS_KEY` was a *registered entity no detector ever emitted*,
+and the high-entropy safety net (confidence 0.55) sits below `standard`'s
+`min_confidence` 0.6 — so it only ever fired in `strict`. Fixed in
+`detectors/secrets.py`: label-anchored `AWS_SECRET_ACCESS_KEY` pattern (0.95 — shape
+alone would flag every base64 hash), a text-mode **labeled-secret** pass reusing
+`structured.py`'s key vocabulary (closes the documented Phase-2b gap where dict-key
+awareness can't apply to JSON-in-text results — catches `DB_PASSWORD=hunter2`), and
+the entropy candidate no longer swallows a `LABEL=` prefix into the span. Corpus
+precision/recall unchanged at 1.000/1.000 in both profiles; 12 regression tests.
 
 Deferred within 6b (needs the framework's per-connector plugin loading, itself
 deferred in 6a): pack-local `constraints.py` / `detectors.py` (org allowlist,
