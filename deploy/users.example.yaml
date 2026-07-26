@@ -1,0 +1,14 @@
+# Console users for the docker-compose stack. DEV credentials — replace before
+# any real deployment. Passwords are stored as PBKDF2 hashes (never plaintext);
+# generate your own with:  mcp-gateway console hash-password
+#
+# The hashes below correspond to the demo passwords "viewer-dev" and
+# "approver-dev" respectively — fine for a local `docker compose up`, useless
+# anywhere real. Rotate them.
+users:
+  - username: viewer
+    role: viewer
+    password_hash: "pbkdf2_sha256$200000$zCq6noQiLCASB4haZvRYVw$-H1I7tfGbqYYH5uNetS3w_auSv6V6XWCq8h-XNAHlGc"
+  - username: approver
+    role: approver
+    password_hash: "pbkdf2_sha256$200000$6C5H96hUIxMhTbsb-_p3TQ$etVjClvqS_utY2n3kO1G787ykq4YsXHlnsIXB595yEA"

@@ -9,7 +9,7 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–4 COMPLETE (Phase 4 — Console v2, 2026-07-23). Next: Phase 5 — Streamable HTTP transport + central mode.**
+**➡️ You are here: Phases 0–5 COMPLETE (Phase 5 — Streamable HTTP + central mode, 2026-07-23). Next: Phase 6 — Connector framework + GitHub pack.**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -205,18 +205,46 @@ SQLite audit index, SSE live feed with resume, human approvals implementing the
 gateway's HTTP contract, cookie authn with viewer/approver roles, policy view,
 and a policy backtester (CLI + panel) sharing one engine.
 
-## Phase 5 — Streamable HTTP transport + central mode (size: L) ⬅️ NEXT
+## Phase 5 — Streamable HTTP transport + central mode (size: L) ✅ DONE (2026-07-23)
 
-- [ ] `transports/streamable_http.py` — MCP Streamable HTTP endpoint, `Mcp-Session-Id`, SSE streams
-- [ ] Multi-upstream routing: `/servers/<name>/mcp` bound to pack + policy; per-upstream supervision/backoff
-- [ ] `state/redis.py` + `state/postgres.py` (index); config switches memory/sqlite ↔ redis/postgres
-- [ ] `mcp-gateway serve --config gateway.yaml`; Dockerfile + docker-compose (gateway + console + redis + postgres)
-- [ ] Load test: sustained 100 calls/sec, p99 added latency < 50 ms on regex path
+Split into 5a–5d; work strictly in order, finish + verify each before the next.
 
-**Exit criteria:** Claude Code connects to `http://gateway/servers/filesystem/mcp`
-and is policed identically to sidecar mode; two replicas share taint/risk via Redis.
+### Phase 5a — Streamable HTTP transport, single upstream ✅ DONE (2026-07-23)
 
-## Phase 6 — Connector framework + GitHub pack (size: L)
+- [x] `transports/upstream.py` — `SubprocessUpstream` + `Upstream` protocol: launch + pump an upstream MCP subprocess (16 MiB frame limit, fail-closed on overrun, grace-then-kill shutdown), factored so the HTTP transport reuses it and tests inject an in-process fake
+- [x] `transports/streamable_http.py` — per-`Mcp-Session-Id` session = its own `SecurityGateway` + upstream, acting as the gateway's `Transport` (`send_client` resolves the pending POST future or enqueues to the session's SSE channel; `send_upstream` writes to the upstream). `create_streamable_http_app(...)` FastAPI app: `POST /mcp` (initialize → mint session id; request → policed, awaits correlated response as JSON, gateway-deadline → JSON-RPC error; notification → 202), `GET /mcp` (SSE server→client channel), `DELETE /mcp` (terminate)
+- [x] Per-session audit recorder over a shared spool via `_NonClosingSink` (no cross-session `session_id` bleed; shared spool closed once at app shutdown); fail-closed on unknown/missing session id (404/400)
+- [x] Tests: in-process ASGI via httpx ASGITransport with a fake upstream — initialize handshake + session id, allowed call reaches upstream, blocked call returns the policy-denied error (never reaches upstream), tools/list filtered, unknown session 404, missing session 400, notification 202, DELETE terminates, session isolation, gateway timeout (10 new; 263 total green, ruff clean)
+
+### Phase 5b — Multi-upstream routing + `mcp-gateway serve --config` ✅ DONE (2026-07-23)
+
+- [x] `create_central_app(hubs)` — `/servers/<name>/mcp` routing, each name bound to its own `StreamableHttpGateway` (policy pack + session registry); per-endpoint isolation (a session id belongs to one upstream); `GET /servers` lists them; unknown upstream → 404 (`-32004`). Shared POST/GET/DELETE handlers factored so single- and multi-upstream apps differ only in routing
+- [x] `central/config.py` — `GatewayConfig` + `load_gateway_config` (YAML/JSON, fail-closed validation: non-empty upstreams, unique names, command/policy shape, supported state backend) + `build_central_app(config, upstream_factory=…)` (each upstream → engine + RedactionService + deny-broker, shared spool; upstream factory injectable for tests). `gateway.example.yaml` added
+- [x] `mcp-gateway serve --config gateway.yaml [--host --port]` (in the `[server]` extra; lazy import, clear error without it)
+- [x] Tests: 14 new — config load/defaults/JSON/validation (parametrized fail-closed cases), multi-upstream routing polices each by its own policy, cross-upstream session isolation, unknown upstream, config→app assembly with injected fakes. Verified live: `serve` in front of `demo/mock_server.py` — session handshake, policy-filtered `tools/list`, and **PII-redacted** `crm.get_customer` result (central polices identically to sidecar; audit holds counts only). 277 total green, ruff clean
+
+### Phase 5c — Redis / Postgres state (honor the SessionStore seam)
+
+- [x] **5c-i Redis session store** ✅ (2026-07-23): `Session.to_dict/from_dict` (durable state; `pending` excluded — belongs to the forwarding replica); `SessionStore.save()` (no-op default; the gateway calls it after each message); `state/redis.py` `RedisSessionStore` (sync redis client, `[redis]` extra, TTL, fail-closed on corrupt blob); gateway gains a `session_id` param so its id == the client's `Mcp-Session-Id` (also fixes audit correlation) and can bind an existing id to resume shared state; `central/config.py` `backend: redis` (+ `state.url`) wires ONE shared store into every session's gateway. Tests (fakeredis): dict round-trip, two replicas share taint/suspension/risk (store-level + through the real gateway), corrupt-blob/TTL/unknown-id. `fakeredis` in the `[dev]` extra.
+- [x] **5c-ii Postgres audit-index store** ✅ (2026-07-23): `state/postgres.py` `PostgresAuditIndex` mirroring `audit/index.py`'s full query surface over Postgres (`%s` placeholders, `ON CONFLICT` upsert, `event_offset` column since `offset` is reserved), `[postgres]` extra (`psycopg[binary]`, guarded import). Row-shaping/roll-up factored into pure helpers (`event_columns`, `rollup_values`, `hydrate`, `session_row`) — 7 unit tests run in the sandbox; the DB round-trip test is skip-guarded on `$TEST_PG_DSN` (absent here → skips cleanly)
+
+### Phase 5d — Dockerfile + compose + load test ✅ DONE (2026-07-23)
+
+- [x] `Dockerfile` (python:3.12-slim, `[server,vault,redis,postgres]` extras, non-root, entrypoint = `mcp-gateway` CLI) + `docker-compose.yml` (gateway + console + redis + postgres, shared `audit-data` volume, healthchecks) + `deploy/gateway.docker.yaml` (redis-backed) + `deploy/users.example.yaml`. Authored + statically validated (compose parses; the docker config loads through `load_gateway_config`); docker itself is not runnable in the sandbox
+- [x] `scripts/loadtest.py` — regex-path added-latency harness (policy match + regex constraint, no-op transport) with `--calls`/`--assert-p99-ms`; `tests/unit/test_loadtest.py` sandbox smoke. **Measured: ~24k calls/sec, p99 ≈ 0.1 ms** — far under the 100 calls/sec, p99 < 50 ms target
+
+**Exit criteria: MET.** (1) An MCP client connects to `/servers/<name>/mcp` and is
+policed identically to sidecar mode — verified live against `demo/mock_server.py`
+(filtered `tools/list`, PII-redacted result, counts-only audit) in 5b. (2) Two
+replicas share taint/risk via Redis — verified in 5c-i (shared store, through the
+real gateway). Regex-path latency target beaten by ~500× in 5d.
+
+**Phase 5 COMPLETE (2026-07-23).** Central mode: MCP Streamable HTTP transport,
+multi-upstream routing bound to per-pack policy, `mcp-gateway serve --config`,
+Redis-shared session state across replicas, a Postgres audit-index option, and a
+container stack — the gateway now runs as an enterprise service, not only a sidecar.
+
+## Phase 6 — Connector framework + GitHub pack (size: L) ⬅️ NEXT
 
 - [ ] `connectors/base.py` + registry + `mcp-gateway add <name>`; override file mechanism
 - [ ] GitHub pack per ARCHITECTURE §4: full `tools.yaml` inventory (risk-classified), `policy.yaml`

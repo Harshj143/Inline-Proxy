@@ -67,6 +67,7 @@ class SecurityGateway:
         redaction: RedactionService | None = None,
         store: SessionStore | None = None,
         anomaly: AnomalyMonitor | None = None,
+        session_id: str | None = None,
     ):
         self.pipeline = pipeline
         self.audit = audit
@@ -88,7 +89,11 @@ class SecurityGateway:
         self.store = store or MemorySessionStore()
         # Behavioral monitor (off by default); its verdicts feed the risk engine.
         self.anomaly = anomaly
-        self.session = self.store.get_or_create(uuid.uuid4().hex[:8])
+        # The session id is the gateway's identity: in central mode it IS the
+        # client's Mcp-Session-Id, so audit events correlate to the HTTP session,
+        # and a replica can bind an existing id to resume shared state from the
+        # store (Phase 5c). Sidecar leaves it None → a fresh random session.
+        self.session = self.store.get_or_create(session_id or uuid.uuid4().hex[:8])
         # Every event from this gateway carries the session id; the console
         # and SIEM group on it.
         self.audit.default_fields.setdefault("session_id", self.session.id)
@@ -133,8 +138,22 @@ class SecurityGateway:
         await self.audit.emit(events.GATEWAY_STOP)
         await self.audit.close()
 
+    def _persist(self) -> None:
+        """Write session state back to the store after handling a message.
+
+        A no-op for the in-memory store (it holds the live object); a shared
+        store (Redis, Phase 5c) mirrors taint/risk/suspension so another replica
+        binding the same session id resumes it. Pending (in-flight) calls are
+        deliberately not shared — they belong to the replica that forwarded them.
+        """
+        self.store.save(self.session)
+
     # ------------------------------------------------------ client -> upstream
     async def on_client_line(self, line: str) -> None:
+        await self._dispatch_client_line(line)
+        self._persist()
+
+    async def _dispatch_client_line(self, line: str) -> None:
         msg = decode_line(line)
         if msg is None:
             await self.audit.emit(
@@ -304,6 +323,10 @@ class SecurityGateway:
 
     # ------------------------------------------------------ upstream -> client
     async def on_upstream_line(self, line: str) -> None:
+        await self._dispatch_upstream_line(line)
+        self._persist()
+
+    async def _dispatch_upstream_line(self, line: str) -> None:
         msg = decode_line(line)
         if msg is None:
             await self.audit.emit(
