@@ -9,15 +9,32 @@ from pathlib import Path
 
 from mcp_gateway.policy.testing import run_policy_tests
 
-POLICIES = Path(__file__).resolve().parents[2] / "policies"
+ROOT = Path(__file__).resolve().parents[2]
+POLICIES = ROOT / "policies"
+CONNECTORS = ROOT / "connectors"
 
 
-def test_mock_crm_pack_goldens():
-    results = run_policy_tests(
-        [POLICIES / "mock-crm.yaml"], POLICIES / "mock-crm.tests.yaml"
-    )
+def _assert_goldens(policy_layers, tests_path, minimum):
+    results = run_policy_tests(policy_layers, tests_path)
     failures = [
         f"{r.name}: {'; '.join(r.failures)}" for r in results if not r.passed
     ]
     assert not failures, "\n".join(failures)
-    assert len(results) >= 10  # the pack keeps meaningful coverage
+    assert len(results) >= minimum  # the pack keeps meaningful coverage
+
+
+def test_mock_crm_pack_goldens():
+    _assert_goldens(
+        [POLICIES / "mock-crm.yaml"], POLICIES / "mock-crm.tests.yaml", minimum=10
+    )
+
+
+def test_slack_pack_goldens():
+    """Both layers: role cases need roles.yaml merged on top of policy.yaml,
+    exactly as `Connector.policy_layers()` orders them at runtime."""
+    pack = CONNECTORS / "slack"
+    _assert_goldens(
+        [pack / "policy.yaml", pack / "roles.yaml"],
+        pack / "policy_tests.yaml",
+        minimum=25,
+    )

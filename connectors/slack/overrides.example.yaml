@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../policies/policy.schema.json
+#
+# EXAMPLE company override layer for the Slack connector.
+#
+# Customize the pack with a layer like this — never by forking it:
+#
+#   mcp-gateway wrap --connector slack --override my-company.yaml -- <server cmd>
+#
+# Layers merge field-by-field, later wins (docs/ARCHITECTURE.md §5). Naming a
+# field replaces just that field; everything else in the shipped rule survives.
+# That is deliberately fail-safe: loosening an action does not silently discard
+# the constraints attached to it. Use `replace: true` on a rule when you really
+# do mean "discard the lower layers for this tool".
+#
+# Nothing here is enabled by default — this file is documentation you copy from.
+
+schema_version: 1
+name: acme-slack-overrides
+
+tools:
+  # ---------------------------------------------------------------------- 1.
+  # CLOSE THE CHANNEL-ID GAP. This is the most important override, and the one
+  # every deployment needs.
+  #
+  # The shipped ACL matches channel NAMES (#exec, hr-*). Slack addresses
+  # channels by opaque ID (C0EXEC0001), and no name pattern can see through an
+  # ID — a gap the pack states openly and pins with a golden test. Close it by
+  # listing your real IDs.
+  #
+  # Note this REPLACES the shipped `constraints` list for the tool, so repeat
+  # the name pattern alongside your IDs rather than dropping it.
+  read_channel:
+    constraints:
+      - arg: channel
+        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
+        flags: i
+        reason: restricted channel (by name)
+      - arg: channel_id
+        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
+        flags: i
+        reason: restricted channel (by name)
+      # Your workspace's real restricted channel IDs:
+      - arg: channel_id
+        must_not_match: '^(C0EXEC0001|C0HR000042|C0LEGAL0007)$'
+        reason: restricted channel (by ID) — #exec, #hr-benefits, #legal
+
+  # ---------------------------------------------------------------------- 2.
+  # TIGHTEN THE SEARCH BYPASS. `search_messages` takes a query, not a channel,
+  # so the channel ACL cannot constrain it: it reads across every conversation
+  # the OAuth token can see. The pack ships `redact` because blocking search
+  # outright makes most Slack agents useless. If your workspace keeps genuinely
+  # sensitive material in private channels, escalate it.
+  search_messages:
+    action: require_approval
+    then: redact
+    reason: >-
+      workspace-wide search reaches restricted channels the ACL cannot see;
+      a human authorizes each sweep, and results are still redacted
+
+  # ---------------------------------------------------------------------- 3.
+  # RELAX DRAFTS. The pack treats draft_message as an egress sink because
+  # Slack's docs do not establish whether a draft can be delivered without a
+  # second human action. Once you have verified in YOUR workspace that drafts
+  # cannot self-send, this is a safe and useful downgrade.
+  draft_message:
+    action: allow
+    reason: >-
+      verified against workspace <NAME> on <DATE>: drafts render in the client
+      only and require a human click to deliver
+
+  # ---------------------------------------------------------------------- 4.
+  # ADD A CHANNEL ALLOWLIST instead of a denylist, if your posture is that
+  # agents read only where they are explicitly invited. `must_match` is a
+  # positive requirement, so a call that omits the argument is denied too —
+  # fail-closed by construction.
+  #
+  # ⚠️  Only add this once you have CONFIRMED the real argument name against a
+  # live `tools/list`. A `must_match` on an argument the server does not use is
+  # evaluated against "" and denies every call to the tool.
+  #
+  # read_thread:
+  #   constraints:
+  #     - arg: channel_id
+  #       must_match: '^(C0SUPPORT01|C0ENG000001)$'
+  #       reason: agents may only read the support and engineering channels
+
+# ------------------------------------------------------------------------ 5.
+# RELAX THE TAINT MODEL — the pack's sharpest usability tradeoff, and the one
+# thing on this page an override layer CANNOT do for you.
+#
+# The shipped policy makes every content read a taint source and every write a
+# sink, so a session may read OR write, not both. That deliberately breaks
+# "summarize this thread and post the summary", which is the single most common
+# Slack agent workflow.
+#
+# ⚠️  FRAMEWORK LIMITATION: taint_sources and taint_sinks merge as a UNION
+# across layers and sequence_rules are concatenated (policy/merge.py). Merging
+# is therefore ADDITIVE ONLY — a later layer can add a taint source but can
+# never remove one, and there is no top-level `replace`. Layer order does not
+# help either: `wrap` always applies the connector's layers first
+# (cli/__init__.py `_build_engine`).
+#
+# So the "customize with an override, never a fork" promise does not hold for
+# the taint model specifically. To narrow it today you must copy policy.yaml
+# and run it with --policy instead of --connector:
+#
+#   cp connectors/slack/policy.yaml my-slack-policy.yaml   # then edit taint_sources
+#   mcp-gateway wrap --policy my-slack-policy.yaml \
+#                    --policy connectors/slack/roles.yaml -- <server cmd>
+#
+# That is a real gap in the framework rather than a property of this pack, and
+# it is worth fixing upstream (a `replace: true` at layer level, or explicit
+# taint_sources_remove) before more packs inherit the workaround.
+#
+# If you do narrow it, understand what you give up: an injected instruction
+# sitting in an ordinary channel can then steer the session to post, with human
+# approval on send_message as the remaining control. Only accept that trade if
+# your approvers actually read what they approve.

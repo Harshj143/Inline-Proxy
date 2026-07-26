@@ -1,0 +1,279 @@
+# Golden decision tests for the Slack connector.
+#
+# Run (both layers — role cases need roles.yaml merged on top):
+#   mcp-gateway policy test --policy connectors/slack/policy.yaml \
+#                           --policy connectors/slack/roles.yaml \
+#                           --tests  connectors/slack/policy_tests.yaml
+# Also enforced in CI via tests/unit/test_goldens.py.
+#
+# Scope note: the golden harness runs policy → constraints → action. It does
+# NOT run the sequence gate, so taint and sequence_rules are not covered here —
+# those are session-state controls, asserted in tests/unit/test_slack_sequence.py
+# against this same shipped policy file.
+
+tests:
+  # --------------------------------------------------------- discovery: allow
+  - name: channel search is allowed (metadata only)
+    tool: search_channels
+    arguments: { query: "incident" }
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: emoji search is allowed
+    tool: search_emoji
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: listing channel members is allowed (opaque IDs, not PII)
+    tool: list_channel_members
+    arguments: { channel: "general" }
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: adding a reaction is allowed (bandwidth too low to matter)
+    tool: add_reaction
+    arguments: { channel: "general", timestamp: "1720000000.0001", reaction: "eyes" }
+    expect:
+      outcome: allow
+      action: allow
+
+  # ------------------------------------------------------- people: redact PII
+  - name: user directory search is redacted
+    tool: search_users
+    arguments: { query: "dana" }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+      reason_contains: email and phone
+
+  - name: user profile lookup is redacted
+    tool: fetch_user_info
+    arguments: { user_id: "U024BE7LH" }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+
+  # ------------------------------------------------ message content: redacted
+  - name: ordinary channel history is redacted, not blocked
+    tool: read_channel
+    arguments: { channel: "general" }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+
+  - name: thread replies are redacted
+    tool: read_thread
+    arguments: { channel: "general", thread_ts: "1720000000.0001" }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+
+  - name: workspace-wide message search is redacted
+    tool: search_messages
+    arguments: { query: "password" }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+
+  - name: canvas read is redacted
+    tool: read_canvas
+    arguments: { canvas_id: "F0123456" }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+
+  - name: file content is quarantined, not redacted
+    tool: read_file
+    arguments: { file_id: "F0123456" }
+    expect:
+      outcome: allow
+      action: quarantine
+      disposition: quarantine
+      reason_contains: no useful partial view
+
+  # --------------------------------------------------------- the channel ACL
+  - name: "reading #exec is denied by the channel ACL"
+    tool: read_channel
+    arguments: { channel: "#exec" }
+    expect:
+      outcome: deny
+      stage: constraints
+      reason_contains: off-limits to agents
+
+  - name: "the ACL covers prefixed channels: hr-benefits"
+    tool: read_channel
+    arguments: { channel: "hr-benefits" }
+    expect:
+      outcome: deny
+      stage: constraints
+
+  - name: the ACL also matches when the arg is named channel_id
+    tool: read_channel
+    arguments: { channel_id: "#payroll" }
+    expect:
+      outcome: deny
+      stage: constraints
+
+  - name: "the ACL does not over-match: #execute-orders is a normal channel"
+    tool: read_channel
+    arguments: { channel: "#execute-orders" }
+    expect:
+      outcome: allow
+      action: redact
+
+  # A deliberately-passing test that documents a KNOWN GAP rather than hiding
+  # it: Slack addresses channels by opaque ID (C0EXEC0001), and a name-based
+  # denylist cannot see through an ID. A deployment closes this by adding its
+  # real IDs in an override layer (overrides.example.yaml). If a future change
+  # makes the pack ID-aware, this expectation should be inverted deliberately.
+  - name: "KNOWN GAP: an opaque channel ID bypasses the name-based ACL"
+    tool: read_channel
+    arguments: { channel_id: "C0EXEC0001" }
+    expect:
+      outcome: allow
+      action: redact
+
+  # ----------------------------------------------------- writes: approval-gated
+  # Without a broker wired in, require_approval fails closed — which is what
+  # the harness asserts. A gateway run with `--approvals http` reaches a human.
+  - name: sending a message requires approval (fails closed with no broker)
+    tool: send_message
+    arguments: { channel: "general", text: "deploy is green" }
+    expect:
+      outcome: deny
+      action: require_approval
+      reason_contains: approval broker
+
+  # THE ORDERING PROOF: a post to a forbidden channel dies at the constraints
+  # stage, which runs BEFORE the action stage. No human is ever paged about a
+  # call that policy already forbids, so approvers cannot rubber-stamp it.
+  - name: "posting to #exec dies at constraints, before any human is asked"
+    tool: send_message
+    arguments: { channel: "#exec", text: "quarterly numbers" }
+    expect:
+      outcome: deny
+      stage: constraints
+      reason_contains: blocked before a human is asked
+
+  - name: drafting a message requires approval (treated as a sink until proven)
+    tool: draft_message
+    arguments: { channel: "general", text: "draft" }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: creating a conversation requires approval
+    tool: create_conversation
+    arguments: { name: "incident-4821" }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: creating a canvas requires approval
+    tool: create_canvas
+    arguments: { title: "runbook" }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: updating a canvas requires approval
+    tool: update_canvas
+    arguments: { canvas_id: "F0123456", content: "..." }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  # ------------------------------------------------------------ default deny
+  - name: an untracked tool meets default deny
+    tool: delete_message
+    arguments: { channel: "general", ts: "1720000000.0001" }
+    expect:
+      outcome: deny
+      action: block
+      stage: action
+      reason_contains: default policy
+
+  # ----------------------------------------------------------- role overlays
+  - name: workspace-admin sees the raw user directory
+    tool: search_users
+    role: workspace-admin
+    arguments: { query: "dana" }
+    expect:
+      outcome: allow
+      action: allow
+      reason_contains: cleared to see the raw user directory
+
+  - name: workspace-admin sees raw profile data
+    tool: fetch_user_info
+    role: workspace-admin
+    arguments: { user_id: "U024BE7LH" }
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: support-agent gets reversible (tokenized) PII, not masked
+    tool: search_users
+    role: support-agent
+    arguments: { query: "dana" }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+      reason_contains: tokenized
+
+  - name: workspace-admin reads file content redacted instead of quarantined
+    tool: read_file
+    role: workspace-admin
+    arguments: { file_id: "F0123456" }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+
+  - name: a headless bot is blocked from messaging outright, not merely denied
+    tool: send_message
+    role: bot
+    arguments: { channel: "general", text: "hello" }
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: no approver
+
+  - name: a headless bot may not create conversations
+    tool: create_conversation
+    role: bot
+    arguments: { name: "incident-4821" }
+    expect:
+      outcome: deny
+      action: block
+
+  - name: a bot still reads, with the strictest masking
+    tool: search_users
+    role: bot
+    arguments: { query: "dana" }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+      reason_contains: strictest masking
+
+  # The channel ACL is a constraint, and a role overlay that does not name
+  # `constraints` leaves it in place — so even an admin cannot read #exec
+  # through the agent. Privilege escalation via role overlay is the mistake
+  # this case exists to catch.
+  - name: the channel ACL survives the workspace-admin overlay
+    tool: read_channel
+    role: workspace-admin
+    arguments: { channel: "#exec" }
+    expect:
+      outcome: deny
+      stage: constraints
