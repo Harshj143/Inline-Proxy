@@ -38,3 +38,16 @@ def test_slack_pack_goldens():
         pack / "policy_tests.yaml",
         minimum=25,
     )
+
+
+def test_github_pack_goldens():
+    """Both layers, like Slack: the reviewer/release-manager/bot role cases only
+    resolve once roles.yaml is merged on top of policy.yaml (the order
+    `Connector.policy_layers()` uses at runtime). Running only policy.yaml would
+    leave every role case failing closed on the base require_approval."""
+    pack = CONNECTORS / "github"
+    _assert_goldens(
+        [pack / "policy.yaml", pack / "roles.yaml"],
+        pack / "policy_tests.yaml",
+        minimum=20,
+    )
