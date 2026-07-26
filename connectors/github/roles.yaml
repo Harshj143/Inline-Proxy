@@ -1,0 +1,335 @@
+# Role overlays for the GitHub pack — layered AFTER policy.yaml.
+#
+# Field-level merge: an overlay changes only the fields it names, so a role
+# that relaxes an action still inherits the base rule's redaction/reason.
+# Least privilege is the default; these are deliberate, narrow grants.
+#
+#   developer       — the default; unchanged from policy.yaml (writes need approval)
+#   reviewer        — may comment/review without approval (high-volume, low-blast-radius),
+#                     but code-changing and merge operations still need one
+#   release-manager — may merge, branch, push, and trigger CI without approval
+#   bot             — non-interactive: no human can answer an approval prompt, so
+#                     every write is BLOCKED outright rather than left to fail closed
+schema_version: 1
+name: github-roles
+
+tools:
+  actions_run_trigger:
+    roles:
+      release-manager:
+        action: allow
+        reason: "release managers own the merge/deploy path"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  add_comment_to_pending_review:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  add_issue_comment:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  add_issue_comment_reaction:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  add_issue_reaction:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  add_pull_request_review_comment:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  add_pull_request_review_comment_reaction:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  add_reply_to_pull_request_comment:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  add_sub_issue:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  assign_copilot_to_issue:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  assign_copilot_to_issue_with_intent:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  create_branch:
+    roles:
+      release-manager:
+        action: allow
+        reason: "release managers own the merge/deploy path"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  create_gist:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  create_issue:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  create_or_update_file:
+    roles:
+      release-manager:
+        action: allow
+        reason: "release managers own the merge/deploy path"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  create_pull_request:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  create_pull_request_review:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  create_repository:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  discussion_comment_write:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  dismiss_notification:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  fork_repository:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  issue_dependency_write:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  issue_write:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  label_write:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  manage_notification_subscription:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  manage_repository_notification_subscription:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  mark_all_notifications_read:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  merge_pull_request:
+    roles:
+      release-manager:
+        action: allow
+        reason: "release managers own the merge/deploy path"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  projects_write:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  pull_request_review_write:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  push_files:
+    roles:
+      release-manager:
+        action: allow
+        reason: "release managers own the merge/deploy path"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  remove_sub_issue:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  reprioritize_sub_issue:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  request_copilot_review:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  request_pull_request_reviewers:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  resolve_review_thread:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  set_issue_fields:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  star_repository:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  sub_issue_write:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  submit_pending_pull_request_review:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  unresolve_review_thread:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  unstar_repository:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  update_gist:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  update_issue_assignees:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  update_issue_labels:
+    roles:
+      reviewer:
+        action: allow
+        reason: "reviewers comment and review as their normal work"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  update_issue_state:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  update_issue_type:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  update_pull_request:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  update_pull_request_branch:
+    roles:
+      release-manager:
+        action: allow
+        reason: "release managers own the merge/deploy path"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"
+  update_pull_request_draft_state:
+    roles:
+      bot:
+        action: block
+        reason: "unattended bot identity may not change GitHub state"

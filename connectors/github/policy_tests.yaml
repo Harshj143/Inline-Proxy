@@ -1,0 +1,200 @@
+# Golden decision tests for the GitHub connector.
+#
+# Run: mcp-gateway policy test \
+#        --policy connectors/github/policy.yaml \
+#        --policy connectors/github/roles.yaml \
+#        --tests  connectors/github/policy_tests.yaml
+# Also enforced in CI via tests/unit/test_github_pack.py, which additionally
+# asserts EVERY tool in tools.yaml has an explicit rule (no silent default-deny).
+#
+# One representative case per risk class and per role decision. Taint/sequence
+# are session-state controls, so they are NOT covered here (the golden harness is
+# static-policy only) — see tests/e2e/test_wrap_github_attack.py.
+tests:
+  # ---------------------------------------------------------------- reads
+  - name: file contents are redacted, not passed through raw
+    tool: get_file_contents
+    arguments: { owner: acme, repo: web, path: README.md }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+
+  - name: issue read is redacted (and is a taint source at runtime)
+    tool: issue_read
+    arguments: { owner: acme, repo: web, issue_number: 7 }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+
+  - name: code search is redacted
+    tool: search_code
+    arguments: { query: "password" }
+    expect:
+      outcome: allow
+      action: redact
+
+  # ------------------------------------------------ secret-adjacent reads
+  - name: CI job logs are quarantined, never shown to the model
+    tool: get_job_logs
+    arguments: { owner: acme, repo: web, job_id: 42 }
+    expect:
+      outcome: allow
+      action: quarantine
+      disposition: quarantine
+      reason_contains: raw secret values
+
+  - name: secret-scanning alerts are quarantined
+    tool: list_secret_scanning_alerts
+    arguments: { owner: acme, repo: web }
+    expect:
+      outcome: allow
+      action: quarantine
+      disposition: quarantine
+
+  - name: code-scanning alerts use the strict redaction profile
+    tool: list_code_scanning_alerts
+    arguments: { owner: acme, repo: web }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+      reason_contains: security finding
+
+  - name: dependabot alerts use the strict redaction profile
+    tool: get_dependabot_alert
+    arguments: { owner: acme, repo: web, alertNumber: 3 }
+    expect:
+      outcome: allow
+      action: redact
+
+  # --------------------------------------------------------------- writes
+  - name: opening a pull request needs a human
+    tool: create_pull_request
+    arguments: { owner: acme, repo: web, title: fix, head: f, base: main }
+    expect:
+      outcome: deny            # fail-closed until an approver is wired
+      action: require_approval
+      reason_contains: approval
+
+  - name: merging needs a human
+    tool: merge_pull_request
+    arguments: { owner: acme, repo: web, pullNumber: 5 }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: pushing files needs a human (and is a taint sink at runtime)
+    tool: push_files
+    arguments: { owner: acme, repo: web, branch: main }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: creating a gist needs a human (classic exfiltration path)
+    tool: create_gist
+    arguments: { filename: notes.txt, content: hello }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: triggering CI needs a human
+    tool: actions_run_trigger
+    arguments: { owner: acme, repo: web, method: run_workflow }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  # ---------------------------------------------------------- destructive
+  - name: deleting a file is blocked outright
+    tool: delete_file
+    arguments: { owner: acme, repo: web, path: prod.env }
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: irreversible
+
+  - name: deleting a pending review is blocked outright
+    tool: delete_pending_pull_request_review
+    arguments: { owner: acme, repo: web, pullNumber: 5 }
+    expect:
+      outcome: deny
+      action: block
+
+  # -------------------------------------------------------------- default
+  - name: a tool with no rule meets default deny
+    tool: some_future_github_tool
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: default policy
+
+  # ---------------------------------------------------------------- roles
+  - name: reviewer may comment without an approval round-trip
+    tool: add_issue_comment
+    role: reviewer
+    arguments: { owner: acme, repo: web, issue_number: 7, body: LGTM }
+    expect:
+      outcome: allow
+      action: allow
+      reason_contains: reviewers comment
+
+  - name: reviewer may submit a review
+    tool: create_pull_request_review
+    role: reviewer
+    arguments: { owner: acme, repo: web, pullNumber: 5 }
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: reviewer still cannot merge (not their blast radius)
+    tool: merge_pull_request
+    role: reviewer
+    arguments: { owner: acme, repo: web, pullNumber: 5 }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: release-manager may merge
+    tool: merge_pull_request
+    role: release-manager
+    arguments: { owner: acme, repo: web, pullNumber: 5 }
+    expect:
+      outcome: allow
+      action: allow
+      reason_contains: release managers
+
+  - name: release-manager may push
+    tool: push_files
+    role: release-manager
+    arguments: { owner: acme, repo: web, branch: main }
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: no role escalates a destructive action
+    tool: delete_file
+    role: release-manager
+    arguments: { owner: acme, repo: web, path: prod.env }
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: irreversible
+
+  - name: bot identity cannot write at all (no human to approve)
+    tool: create_pull_request
+    role: bot
+    arguments: { owner: acme, repo: web, title: auto, head: f, base: main }
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: unattended bot
+
+  - name: bot may still read (redacted)
+    tool: get_file_contents
+    role: bot
+    arguments: { owner: acme, repo: web, path: README.md }
+    expect:
+      outcome: allow
+      action: redact

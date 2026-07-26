@@ -1,0 +1,470 @@
+# Complete tool inventory for the GitHub MCP server.
+#
+# Source of truth: github/github-mcp-server v1.7.0, extracted from the tool
+# definitions in pkg/github/*.go — ALL 109 tools, nothing omitted. read/write
+# reflects each tool's own ReadOnlyHint; `risk` is this pack's security
+# classification and is what policy.yaml acts on:
+#   read            — retrieves data (still redacted: GitHub text is untrusted)
+#   write           — changes state (approval-gated)
+#   destructive     — irreversible data loss (blocked)
+#   secret_adjacent — output routinely contains secret values (quarantined/strict)
+#
+# Informational: enforcement lives in policy.yaml. Keep the two in sync when
+# upgrading the upstream server (see README.md § Upgrading).
+tools:
+  # ---- Actions / CI ----
+  actions_get:
+    risk: read
+    toolset: actions
+    description: "Get details about specific GitHub Actions resources."
+  actions_list:
+    risk: read
+    toolset: actions
+    description: "Tools for listing GitHub Actions resources."
+  actions_run_trigger:
+    risk: write
+    toolset: actions
+    description: "Trigger GitHub Actions workflow operations, including running, re-running, cancelling workflow runs, and deleting workflow run logs."
+  get_job_logs:
+    risk: secret_adjacent
+    toolset: actions
+    description: "Get logs for GitHub Actions workflow jobs."
+  # ---- Code quality ----
+  get_code_quality_finding:
+    risk: secret_adjacent
+    toolset: codequality
+    description: "Get details of a specific code quality finding in a GitHub repository."
+  # ---- Code scanning ----
+  get_code_scanning_alert:
+    risk: secret_adjacent
+    toolset: codesecurity
+    description: "Get details of a specific code scanning alert in a GitHub repository."
+  list_code_scanning_alerts:
+    risk: secret_adjacent
+    toolset: codesecurity
+    description: "List code scanning alerts in a GitHub repository."
+  # ---- Context / identity ----
+  get_me:
+    risk: read
+    toolset: context
+    description: "Get details of the authenticated GitHub user. Use this when a request is about the user's own profile for GitHub. Or when information is missing to build other tool calls."
+  get_team_members:
+    risk: read
+    toolset: context
+    description: "Get member usernames of a specific team in an organization. Limited to organizations accessible with current credentials"
+  get_teams:
+    risk: read
+    toolset: context
+    description: "Get details of the teams the user is a member of. Limited to organizations accessible with current credentials"
+  ui_get:
+    risk: read
+    toolset: context
+    description: "Fetch UI data for MCP Apps (labels, assignees, milestones, issue types, branches, issue fields, reviewers)."
+  # ---- Copilot ----
+  assign_copilot_to_issue:
+    risk: write
+    toolset: copilot
+    description: "Assign Copilot to a specific issue in a GitHub repository"
+  request_copilot_review:
+    risk: write
+    toolset: copilot
+    description: "Request a GitHub Copilot code review for a pull request. Use this for automated feedback on pull requests, usually before requesting a human reviewer."
+  # ---- Copilot issue intents ----
+  assign_copilot_to_issue_with_intent:
+    risk: write
+    toolset: copilotissueintents
+    description: "Assign Copilot to a GitHub issue with an explicit intent/instruction"
+  # ---- Dependabot ----
+  get_dependabot_alert:
+    risk: secret_adjacent
+    toolset: dependabot
+    description: "Get details of a specific dependabot alert in a GitHub repository."
+  list_dependabot_alerts:
+    risk: secret_adjacent
+    toolset: dependabot
+    description: "List dependabot alerts in a GitHub repository."
+  # ---- Discussions ----
+  discussion_comment_write:
+    risk: write
+    toolset: discussions
+    description: "Write operations for discussion comments."
+  get_discussion:
+    risk: read
+    toolset: discussions
+    description: "Get a specific discussion by ID"
+  get_discussion_comments:
+    risk: read
+    toolset: discussions
+    description: "Get comments from a discussion"
+  list_discussion_categories:
+    risk: read
+    toolset: discussions
+    description: "List discussion categories with their id and name, for a repository or organisation."
+  list_discussions:
+    risk: read
+    toolset: discussions
+    description: "List discussions for a repository or organisation."
+  # ---- Gists ----
+  create_gist:
+    risk: write
+    toolset: gists
+    description: "Create a new gist"
+  get_gist:
+    risk: read
+    toolset: gists
+    description: "Get gist content of a particular gist, by gist ID"
+  list_gists:
+    risk: read
+    toolset: gists
+    description: "List gists for a user"
+  update_gist:
+    risk: write
+    toolset: gists
+    description: "Update an existing gist"
+  # ---- Git data ----
+  get_repository_tree:
+    risk: read
+    toolset: git
+    description: "Get the tree structure (files and directories) of a GitHub repository at a specific ref or SHA"
+  # ---- Issues ----
+  add_issue_comment:
+    risk: write
+    toolset: issues
+    description: "Add a comment and/or reaction to a specific issue or issue comment in a GitHub repository. Use this tool with pull requests as well (in this case pass pull request number as issue_number), but only if user is not asking specifically to add or react to review comments. At least one of body or reaction is required."
+  add_issue_comment_reaction:
+    risk: write
+    toolset: issues
+    description: "Add a reaction to an issue or pull request comment."
+  add_issue_reaction:
+    risk: write
+    toolset: issues
+    description: "Add a reaction to an issue or pull request."
+  add_sub_issue:
+    risk: write
+    toolset: issues
+    description: "Add a sub-issue to a parent issue."
+  create_issue:
+    risk: write
+    toolset: issues
+    description: "Create a new issue in a GitHub repository with a title and optional body."
+  get_label:
+    risk: read
+    toolset: issues
+    description: "Get a specific label from a repository."
+  issue_dependency_read:
+    risk: read
+    toolset: issues
+    description: "Read an issue's dependency relationships in a GitHub repository: the issues that block it (blocked_by) or the issues it blocks (blocking)."
+  issue_dependency_write:
+    risk: write
+    toolset: issues
+    description: "Add or remove an issue dependency relationship in a GitHub repository."
+  issue_read:
+    risk: read
+    toolset: issues
+    description: "Get information about a specific issue in a GitHub repository."
+  issue_write:
+    risk: write
+    toolset: issues
+    description: "Create a new or update an existing issue in a GitHub repository."
+  label_write:
+    risk: write
+    toolset: issues
+    description: "Perform write operations on repository labels. To set labels on issues, use the 'update_issue' tool."
+  list_issue_fields:
+    risk: read
+    toolset: issues
+    description: "List issue fields for a repository or organization. Returns field definitions including name, type (text, number, date, single_select), and for single_select fields the list of valid option names. When repo is omitted, returns org-level fields directly."
+  list_issue_types:
+    risk: read
+    toolset: issues
+    description: "List supported issue types for a repository or its owner organization. When repo is omitted, returns org-level issue types directly."
+  list_issues:
+    risk: read
+    toolset: issues
+    description: "List issues in a GitHub repository. For pagination, use the 'endCursor' from the previous response's 'pageInfo' in the 'after' parameter."
+  list_label:
+    risk: read
+    toolset: issues
+    description: "List labels from a repository"
+  remove_sub_issue:
+    risk: write
+    toolset: issues
+    description: "Remove a sub-issue from a parent issue."
+  reprioritize_sub_issue:
+    risk: write
+    toolset: issues
+    description: "Reprioritize (reorder) a sub-issue relative to other sub-issues."
+  search_issues:
+    risk: read
+    toolset: issues
+    description: "Search for issues in GitHub repositories using issues search syntax already scoped to is:issue"
+  set_issue_fields:
+    risk: write
+    toolset: issues
+    description: "Set issue field values for an issue. Fields are organization-level custom fields (text, number, date, or single select). Use this to create or update field values on an issue."
+  sub_issue_write:
+    risk: write
+    toolset: issues
+    description: "Add a sub-issue to a parent issue in a GitHub repository."
+  update_issue_assignees:
+    risk: write
+    toolset: issues
+    description: "Update the assignees of an existing issue. This replaces the current assignees with the provided list. When setting values, include a confidence level (LOW, MEDIUM, or HIGH) reflecting how certain you are about the choice."
+  update_issue_labels:
+    risk: write
+    toolset: issues
+    description: "Update the labels of an existing issue. This replaces the current labels with the provided list. When setting values, include a confidence level (LOW, MEDIUM, or HIGH) reflecting how certain you are about the choice."
+  update_issue_state:
+    risk: write
+    toolset: issues
+    description: "Update the state of an existing issue (open or closed), with an optional state reason. When closing, include a confidence level (LOW, MEDIUM, or HIGH) reflecting how certain you are about the decision. Use is_suggestion to propose the change without applying it directly."
+  update_issue_type:
+    risk: write
+    toolset: issues
+    description: "Update the type of an existing issue (e.g. 'bug', 'feature'). When setting values, include a confidence level (LOW, MEDIUM, or HIGH) reflecting how certain you are about the choice."
+  # ---- Notifications ----
+  dismiss_notification:
+    risk: write
+    toolset: notifications
+    description: "Dismiss a notification by marking it as read or done"
+  get_notification_details:
+    risk: read
+    toolset: notifications
+    description: "Get detailed information for a specific GitHub notification, always call this tool when the user asks for details about a specific notification, if you don't know the ID list notifications first."
+  list_notifications:
+    risk: read
+    toolset: notifications
+    description: "Lists all GitHub notifications for the authenticated user, including unread notifications, mentions, review requests, assignments, and updates on issues or pull requests. Use this tool whenever the user asks what to work on next, requests a summary of their GitHub activity, wants to see pending reviews, or needs to check for new updates or tasks. This tool is the primary way to discover actionable items, reminders, and outstanding work on GitHub. Always call this tool when asked what to work on next, what is pending, or what needs attention in GitHub."
+  manage_notification_subscription:
+    risk: write
+    toolset: notifications
+    description: "Manage a notification subscription: ignore, watch, or delete a notification thread subscription."
+  manage_repository_notification_subscription:
+    risk: write
+    toolset: notifications
+    description: "Manage a repository notification subscription: ignore, watch, or delete repository notifications subscription for the provided repository."
+  mark_all_notifications_read:
+    risk: write
+    toolset: notifications
+    description: "Mark all notifications as read"
+  # ---- Organizations ----
+  search_orgs:
+    risk: read
+    toolset: orgs
+    description: "Find GitHub organizations by name, location, or other organization metadata. Ideal for discovering companies, open source foundations, or teams."
+  # ---- Projects ----
+  projects_get:
+    risk: read
+    toolset: projects
+    description: "Get details about specific GitHub Projects resources."
+  projects_list:
+    risk: read
+    toolset: projects
+    description: "Tools for listing GitHub Projects resources."
+  projects_write:
+    risk: write
+    toolset: projects
+    description: "Create and manage GitHub Projects: create projects, add/update/delete items, create status updates, and add iteration fields."
+  # ---- Pull requests ----
+  add_comment_to_pending_review:
+    risk: write
+    toolset: pullrequests
+    description: "Add review comment to the requester's latest pending pull request review. A pending review needs to already exist to call this (check with the user if not sure)."
+  add_pull_request_review_comment:
+    risk: write
+    toolset: pullrequests
+    description: "Add a review comment to the current user's pending pull request review."
+  add_pull_request_review_comment_reaction:
+    risk: write
+    toolset: pullrequests
+    description: "Add a reaction to a pull request review comment."
+  add_reply_to_pull_request_comment:
+    risk: write
+    toolset: pullrequests
+    description: "Add a reply and/or reaction to an existing pull request comment. This can create a new comment linked as a reply to the specified comment, add an emoji reaction to the specified comment, or do both. At least one of body or reaction is required."
+  create_pull_request:
+    risk: write
+    toolset: pullrequests
+    description: "Create a new pull request in a GitHub repository."
+  create_pull_request_review:
+    risk: write
+    toolset: pullrequests
+    description: "Create a review on a pull request. If event is provided, the review is submitted immediately; otherwise a pending review is created."
+  delete_pending_pull_request_review:
+    risk: destructive
+    toolset: pullrequests
+    description: "Delete a pending pull request review."
+  list_pull_requests:
+    risk: read
+    toolset: pullrequests
+    description: "List pull requests in a GitHub repository. If the user specifies an author, then DO NOT use this tool and use the search_pull_requests tool instead."
+  merge_pull_request:
+    risk: write
+    toolset: pullrequests
+    description: "Merge a pull request in a GitHub repository."
+  pull_request_read:
+    risk: read
+    toolset: pullrequests
+    description: "Get information on a specific pull request in GitHub repository."
+  pull_request_review_write:
+    risk: write
+    toolset: pullrequests
+    description: "Create and/or submit, delete review of a pull request."
+  request_pull_request_reviewers:
+    risk: write
+    toolset: pullrequests
+    description: "Request reviewers for a pull request."
+  resolve_review_thread:
+    risk: write
+    toolset: pullrequests
+    description: "Resolve a review thread on a pull request. Resolving an already-resolved thread is a no-op."
+  search_pull_requests:
+    risk: read
+    toolset: pullrequests
+    description: "Search for pull requests in GitHub repositories using issues search syntax already scoped to is:pr"
+  submit_pending_pull_request_review:
+    risk: write
+    toolset: pullrequests
+    description: "Submit a pending pull request review."
+  unresolve_review_thread:
+    risk: write
+    toolset: pullrequests
+    description: "Unresolve a previously resolved review thread on a pull request. Unresolving an already-unresolved thread is a no-op."
+  update_pull_request:
+    risk: write
+    toolset: pullrequests
+    description: "Update an existing pull request in a GitHub repository."
+  update_pull_request_branch:
+    risk: write
+    toolset: pullrequests
+    description: "Update the branch of a pull request with the latest changes from the base branch."
+  update_pull_request_draft_state:
+    risk: write
+    toolset: pullrequests
+    description: "Mark a pull request as draft or ready for review."
+  # ---- Repositories ----
+  create_branch:
+    risk: write
+    toolset: repos
+    description: "Create a new branch in a GitHub repository"
+  create_or_update_file:
+    risk: write
+    toolset: repos
+    description: "Create or update a single file in a GitHub repository."
+  create_repository:
+    risk: write
+    toolset: repos
+    description: "Create a new GitHub repository in your account or specified organization"
+  delete_file:
+    risk: destructive
+    toolset: repos
+    description: "Delete a file from a GitHub repository"
+  fork_repository:
+    risk: write
+    toolset: repos
+    description: "Fork a GitHub repository to your account or specified organization"
+  get_commit:
+    risk: read
+    toolset: repos
+    description: "Get details for a commit from a GitHub repository"
+  get_file_blame:
+    risk: read
+    toolset: repos
+    description: "Get git blame information for a file, showing the commit that last modified each line."
+  get_file_contents:
+    risk: read
+    toolset: repos
+    description: "Get the contents of a file or directory from a GitHub repository"
+  get_latest_release:
+    risk: read
+    toolset: repos
+    description: "Get the latest release in a GitHub repository"
+  get_release_by_tag:
+    risk: read
+    toolset: repos
+    description: "Get a specific release by its tag name in a GitHub repository"
+  get_tag:
+    risk: read
+    toolset: repos
+    description: "Get details about a specific git tag in a GitHub repository"
+  list_branches:
+    risk: read
+    toolset: repos
+    description: "List branches in a GitHub repository"
+  list_commits:
+    risk: read
+    toolset: repos
+    description: "Get list of commits of a branch in a GitHub repository. Returns at least 30 results per page by default, but can return more if specified using the perPage parameter (up to 100)."
+  list_releases:
+    risk: read
+    toolset: repos
+    description: "List releases in a GitHub repository"
+  list_repository_collaborators:
+    risk: read
+    toolset: repos
+    description: "List collaborators of a GitHub repository. Results are paginated; the response includes `nextPage`, `prevPage`, `firstPage`, and `lastPage` fields. To get the next page, use the `nextPage` value as the `page` parameter."
+  list_tags:
+    risk: read
+    toolset: repos
+    description: "List git tags in a GitHub repository"
+  push_files:
+    risk: write
+    toolset: repos
+    description: "Push multiple files to a GitHub repository in a single commit"
+  search_code:
+    risk: read
+    toolset: repos
+    description: "Fast and precise code search across ALL GitHub repositories using GitHub's native search engine. Best for finding exact symbols, functions, classes, or specific code patterns."
+  search_commits:
+    risk: read
+    toolset: repos
+    description: "Search for commits across GitHub repositories using GitHub's commit search syntax. Useful for finding specific changes, authors, or messages across one or many repositories. Searches the default branch only."
+  search_repositories:
+    risk: read
+    toolset: repos
+    description: "Find GitHub repositories by name, description, readme, topics, or other metadata. Perfect for discovering projects, finding examples, or locating specific repositories across GitHub."
+  # ---- Secret scanning ----
+  get_secret_scanning_alert:
+    risk: secret_adjacent
+    toolset: secretprotection
+    description: "Get details of a specific secret scanning alert in a GitHub repository."
+  list_secret_scanning_alerts:
+    risk: secret_adjacent
+    toolset: secretprotection
+    description: "List secret scanning alerts in a GitHub repository."
+  # ---- Security advisories ----
+  get_global_security_advisory:
+    risk: read
+    toolset: securityadvisories
+    description: "Get a global security advisory"
+  list_global_security_advisories:
+    risk: read
+    toolset: securityadvisories
+    description: "List global security advisories from GitHub."
+  list_org_repository_security_advisories:
+    risk: read
+    toolset: securityadvisories
+    description: "List repository security advisories for a GitHub organization."
+  list_repository_security_advisories:
+    risk: read
+    toolset: securityadvisories
+    description: "List repository security advisories for a GitHub repository."
+  # ---- Stargazers ----
+  list_starred_repositories:
+    risk: read
+    toolset: stargazers
+    description: "List starred repositories"
+  star_repository:
+    risk: write
+    toolset: stargazers
+    description: "Star a GitHub repository"
+  unstar_repository:
+    risk: write
+    toolset: stargazers
+    description: "Unstar a GitHub repository"
+  # ---- Users ----
+  search_users:
+    risk: read
+    toolset: users
+    description: "Find GitHub users by username, real name, or other profile information. Useful for locating developers, contributors, or team members."

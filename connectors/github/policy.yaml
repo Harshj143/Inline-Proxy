@@ -1,0 +1,476 @@
+# yaml-language-server: $schema=../../policies/policy.schema.json
+#
+# Default security policy for the GitHub MCP server (github-mcp-server v1.7.0).
+# DEFAULT-DENY over the full 109-tool surface. See README.md for the threat model.
+#   reads            -> redact (GitHub content can carry PII/secrets/injected text)
+#   security findings -> redact:strict; raw-secret reads (logs, secret scanning) -> quarantine
+#   writes           -> require_approval (a human signs off)
+#   destructive      -> block
+# Untrusted content reads taint the session; exfil-capable writes are blocked once tainted.
+schema_version: 1
+name: github
+default_action: block
+
+taint_sources: [get_discussion, get_discussion_comments, get_file_contents, get_gist, get_notification_details, issue_read, list_discussions, list_gists, list_issues, list_pull_requests, pull_request_read, search_code, search_issues, search_pull_requests]
+taint_sinks: [create_gist, create_or_update_file, push_files, update_gist]
+
+sequence_rules:
+  - after: get_job_logs
+    forbid: create_gist
+    reason: no gist right after reading CI logs (secret exfiltration guard)
+  - after: list_secret_scanning_alerts
+    forbid: create_gist
+    reason: no gist right after reading secret-scanning alerts (exfiltration guard)
+
+tools:
+  # ---- Actions / CI ----
+  actions_get:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  actions_list:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  actions_run_trigger:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  get_job_logs:
+    action: quarantine
+    reason: "may expose raw secret values; withheld from the model for review"
+  # ---- Code quality ----
+  get_code_quality_finding:
+    action: redact
+    redaction: strict
+    reason: "security finding; strip any secret/PII before the model sees it"
+  # ---- Code scanning ----
+  get_code_scanning_alert:
+    action: redact
+    redaction: strict
+    reason: "security finding; strip any secret/PII before the model sees it"
+  list_code_scanning_alerts:
+    action: redact
+    redaction: strict
+    reason: "security finding; strip any secret/PII before the model sees it"
+  # ---- Context / identity ----
+  get_me:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  get_team_members:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  get_teams:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  ui_get:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  # ---- Copilot ----
+  assign_copilot_to_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  request_copilot_review:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  # ---- Copilot issue intents ----
+  assign_copilot_to_issue_with_intent:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  # ---- Dependabot ----
+  get_dependabot_alert:
+    action: redact
+    redaction: strict
+    reason: "security finding; strip any secret/PII before the model sees it"
+  list_dependabot_alerts:
+    action: redact
+    redaction: strict
+    reason: "security finding; strip any secret/PII before the model sees it"
+  # ---- Discussions ----
+  discussion_comment_write:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  get_discussion:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  get_discussion_comments:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_discussion_categories:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_discussions:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  # ---- Gists ----
+  create_gist:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  get_gist:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_gists:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  update_gist:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  # ---- Git data ----
+  get_repository_tree:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  # ---- Issues ----
+  add_issue_comment:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  add_issue_comment_reaction:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  add_issue_reaction:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  add_sub_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  create_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  get_label:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  issue_dependency_read:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  issue_dependency_write:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  issue_read:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  issue_write:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  label_write:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  list_issue_fields:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_issue_types:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_issues:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_label:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  remove_sub_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  reprioritize_sub_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  search_issues:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  set_issue_fields:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  sub_issue_write:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  update_issue_assignees:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  update_issue_labels:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  update_issue_state:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  update_issue_type:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  # ---- Notifications ----
+  dismiss_notification:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  get_notification_details:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_notifications:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  manage_notification_subscription:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  manage_repository_notification_subscription:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  mark_all_notifications_read:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  # ---- Organizations ----
+  search_orgs:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  # ---- Projects ----
+  projects_get:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  projects_list:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  projects_write:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  # ---- Pull requests ----
+  add_comment_to_pending_review:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  add_pull_request_review_comment:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  add_pull_request_review_comment_reaction:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  add_reply_to_pull_request_comment:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  create_pull_request:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  create_pull_request_review:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  delete_pending_pull_request_review:
+    action: block
+    reason: "irreversible data loss; blocked by default"
+  list_pull_requests:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  merge_pull_request:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  pull_request_read:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  pull_request_review_write:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  request_pull_request_reviewers:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  resolve_review_thread:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  search_pull_requests:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  submit_pending_pull_request_review:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  unresolve_review_thread:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  update_pull_request:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  update_pull_request_branch:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  update_pull_request_draft_state:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  # ---- Repositories ----
+  create_branch:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  create_or_update_file:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  create_repository:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  delete_file:
+    action: block
+    reason: "irreversible data loss; blocked by default"
+  fork_repository:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  get_commit:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  get_file_blame:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  get_file_contents:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  get_latest_release:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  get_release_by_tag:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  get_tag:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_branches:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_commits:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_releases:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_repository_collaborators:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_tags:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  push_files:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  search_code:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  search_commits:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  search_repositories:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  # ---- Secret scanning ----
+  get_secret_scanning_alert:
+    action: quarantine
+    reason: "may expose raw secret values; withheld from the model for review"
+  list_secret_scanning_alerts:
+    action: quarantine
+    reason: "may expose raw secret values; withheld from the model for review"
+  # ---- Security advisories ----
+  get_global_security_advisory:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_global_security_advisories:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_org_repository_security_advisories:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  list_repository_security_advisories:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  # ---- Stargazers ----
+  list_starred_repositories:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"
+  star_repository:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  unstar_repository:
+    action: require_approval
+    then: allow
+    reason: "state-changing GitHub write; a human signs off"
+  # ---- Users ----
+  search_users:
+    action: redact
+    redaction: standard
+    reason: "GitHub content may carry PII/secrets/injected text; scrub on read"

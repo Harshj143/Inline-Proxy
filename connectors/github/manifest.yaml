@@ -1,0 +1,27 @@
+# Connector manifest — what this pack protects and how to launch it.
+# See docs/CONTRIBUTING.md for the authoring guide.
+name: github
+description: "Security pack for the official GitHub MCP server (109 tools, default-deny)"
+upstream:
+  server: github-mcp-server
+  repository: https://github.com/github/github-mcp-server
+  # Distributed as a container image; a local `github-mcp-server stdio` binary
+  # works identically behind the gateway.
+  package: ghcr.io/github/github-mcp-server
+  # The inventory in tools.yaml was extracted from this version's source.
+  tested_versions: ["v1.7.0"]
+  # The upstream authenticates itself; the gateway never sees the token beyond
+  # passing the environment through to the subprocess it launches.
+  credentials_env: ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+# Template command the gateway launches in sidecar mode. Requires
+# $GITHUB_PERSONAL_ACCESS_TOKEN in the environment:
+#   mcp-gateway wrap --connector github -- \
+#     docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server
+launch:
+  - docker
+  - run
+  - -i
+  - --rm
+  - -e
+  - GITHUB_PERSONAL_ACCESS_TOKEN
+  - ghcr.io/github/github-mcp-server
