@@ -59,6 +59,49 @@ agent / MCP client  <-- stdio -->  GATEWAY  <-- stdio -->  real MCP server
 python demo/run_demo.py
 ```
 
+### Jac hackathon build
+
+The `jac/` directory contains a Jac-native enforcement engine. Its pipeline is
+an Object-Spatial graph and each MCP tool call is a `CallWalker` traversing
+session, policy, constraint, sequence, and action nodes. The existing Python
+code remains the production infrastructure layer.
+
+With Jac 0.16.7 installed:
+
+```bash
+cd jac
+jac install
+jac clean --data --force
+jac check gateway/context.jac gateway/policy.jac gateway/redaction.jac gateway/audit.jac gateway/pipeline.jac transports/wrap.jac
+jac test -d tests
+jac clean --data --force
+jac run demo/attack.jac
+```
+
+Run the complete judge-facing GitHub and Slack attack demonstration from the
+repository root:
+
+```powershell
+.\dashboard\run_attack_lab.ps1
+.\jac\run_demo.ps1 -Scenario all -Pause
+```
+
+The first command launches the graphical Attack Lab at
+`http://localhost:8123`; the second runs the real Jac wrapper evidence
+alongside it. Both use local deterministic MCP servers and planted fake data,
+so they need no GitHub/Slack tokens or network access. See
+[`docs/HACKATHON_DEMO.md`](docs/HACKATHON_DEMO.md) for the end-to-end scenario,
+talk track, expected evidence, and rehearsal checklist.
+
+The real stdio wrapper can protect the existing mock MCP server:
+
+```bash
+jac run -e none transports/wrap.jac policies/mock-crm.yaml jac.audit.jsonl -- python ../demo/mock_server.py
+```
+
+See [`jac/README.md`](jac/README.md) for the architecture, Windows commands,
+and the end-to-end smoke test.
+
 This launches the gateway in front of a mock CRM server and shows:
 
 1. `initialize` and `tools/list` passing through untouched

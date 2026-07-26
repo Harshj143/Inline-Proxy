@@ -109,15 +109,22 @@ def session_summaries() -> list[dict]:
         score, level, tainted = 0, "NORMAL", False
         redactions = blocks = approvals = anomalies = 0
         for r in recs:
-            if isinstance(r.get("session_score"), int):
-                score = r["session_score"]
-            if r.get("session_level"):
-                level = r["session_level"]
+            nested_risk = r.get("risk") if isinstance(r.get("risk"), dict) else {}
+            nested_taint = r.get("taint") if isinstance(r.get("taint"), dict) else {}
+            nested_redactions = (
+                r.get("redactions") if isinstance(r.get("redactions"), dict) else {}
+            )
+            recorded_score = r.get("session_score", nested_risk.get("score"))
+            recorded_level = r.get("session_level", nested_risk.get("level"))
+            if isinstance(recorded_score, int):
+                score = recorded_score
+            if recorded_level:
+                level = recorded_level
             e = r.get("event")
-            if e == "session_tainted":
+            if e == "session_tainted" or nested_taint.get("tainted"):
                 tainted = True
-            elif e == "tool_result_redacted":
-                redactions += r.get("total", 0)
+            if e == "tool_result_redacted":
+                redactions += r.get("total", nested_redactions.get("total", 0))
             elif e in ("tool_call_blocked", "tool_call_blocked_by_sequence",
                        "tool_call_denied_session_suspended"):
                 blocks += 1
@@ -125,12 +132,14 @@ def session_summaries() -> list[dict]:
                 approvals += 1
             elif e == "anomaly_detected":
                 anomalies += 1
+        principal = recs[0].get("principal", {}) if recs else {}
+        principal_roles = principal.get("roles", []) if isinstance(principal, dict) else []
         out.append({
             "id": sid,
             "started": recs[0].get("ts", ""),
             "ended": any(r.get("event") == "gateway_stop" for r in recs),
             "upstream": start.get("upstream", "?"),
-            "role": start.get("role"),
+            "role": start.get("role") or (principal_roles[0] if principal_roles else None),
             "anomaly_backend": start.get("anomaly_backend", "off"),
             "score": score, "level": level, "tainted": tainted,
             "events": len(recs), "redactions": redactions,
@@ -138,6 +147,21 @@ def session_summaries() -> list[dict]:
         })
     out.reverse()  # newest first
     return out
+
+
+def select_incident_summary(summaries: list[dict]) -> dict | None:
+    """Choose the most security-relevant session for the initial Live Ops replay."""
+    if not summaries:
+        return None
+    return max(
+        summaries,
+        key=lambda item: (
+            bool(item.get("tainted")),
+            item.get("score", 0),
+            item.get("redactions", 0),
+            item.get("blocks", 0),
+        ),
+    )
 
 
 def policy_payload() -> dict:
@@ -427,6 +451,7 @@ class Handler(BaseHTTPRequestHandler):
         body = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", _CT.get(path.suffix, "text/plain"))
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -484,11 +509,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         try:
-            # Backlog: replay the most recent session so the feed isn't empty.
+            # Backlog: replay the strongest incident, not a trailing clean-control
+            # session, so redaction and containment evidence is visible immediately.
             grouped = group_sessions(read_all_records())
             if grouped:
-                last = list(grouped.values())[-1]
-                for rec in last:
+                selected = select_incident_summary(session_summaries())
+                selected_id = selected.get("id") if selected else None
+                if selected:
+                    self._sse({"kind": "backlog_session", "summary": selected})
+                replay = grouped.get(selected_id, list(grouped.values())[-1])
+                for rec in replay:
                     self._sse({"kind": "audit", "record": rec, "backlog": True})
             # Any approvals currently waiting for a human.
             with PENDING_LOCK:

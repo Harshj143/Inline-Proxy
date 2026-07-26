@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MCP Security Gateway — Ops Console</title>
+<title>MCP Security Gateway — Attack Lab</title>
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -18,17 +18,230 @@
               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span class="brand-name">MCP Security Gateway</span>
-      <span class="brand-sub">Ops Console</span>
+      <span class="brand-sub">Explainable Attack Lab</span>
     </div>
     <nav class="tabs">
-      <button class="tab active" data-view="live">Live</button>
+      <button class="tab active" data-view="lab">Attack Lab</button>
+      <button class="tab" data-view="live">Live Ops</button>
       <button class="tab" data-view="sessions">Sessions</button>
       <button class="tab" data-view="policy">Policy</button>
     </nav>
     <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">connecting</span></div>
   </header>
 
+  <main class="view lab-view" id="view-lab">
+    <section class="lab-hero">
+      <div>
+        <div class="lab-kicker"><span class="pulse-dot"></span> Interactive security story</div>
+        <h1>Watch Jac break an agent attack chain.</h1>
+        <p>
+          Follow each tool call from the AI agent, through the Jac policy graph,
+          to GitHub or Slack. Every decision is explained without security jargon.
+        </p>
+      </div>
+      <div class="hero-verdict">
+        <span class="verdict-icon" id="lab-verdict-icon">•</span>
+        <div>
+          <span id="lab-verdict-label">Incident state</span>
+          <strong id="lab-final-outcome">Waiting for a new session</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="scenario-picker" aria-label="Attack scenario">
+      <button class="scenario-choice active" data-scenario="github">
+        <span class="scenario-icon github-icon">GH</span>
+        <span>
+          <b>New GitHub agent session</b>
+          <small>Observe a fresh repository workflow</small>
+        </span>
+        <span class="severity severity-new">NEW RUN</span>
+      </button>
+      <button class="scenario-choice" data-scenario="slack">
+        <span class="scenario-icon slack-icon">SL</span>
+        <span>
+          <b>New Slack support session</b>
+          <small>Observe a fresh workspace workflow</small>
+        </span>
+        <span class="severity severity-new">NEW RUN</span>
+      </button>
+    </section>
+
+    <section class="lab-summary" aria-label="Current simulation status">
+      <div>
+        <span class="summary-label">Step</span>
+        <strong id="lab-step-count">Waiting</strong>
+      </div>
+      <div>
+        <span class="summary-label">Decision</span>
+        <strong><span class="decision-pill decision-hide" id="lab-decision">NO ACTIVITY</span></strong>
+      </div>
+      <div>
+        <span class="summary-label">Session trust</span>
+        <strong id="lab-trust">Clean</strong>
+      </div>
+      <div class="summary-risk">
+        <span class="summary-label">Risk score</span>
+        <strong id="lab-risk">0 · Normal</strong>
+        <span class="mini-risk-track"><i id="lab-risk-fill"></i></span>
+      </div>
+      <div>
+        <span class="summary-label">Upstream service</span>
+        <strong id="lab-upstream">Waiting</strong>
+      </div>
+    </section>
+
+    <section class="topology card" id="lab-topology">
+      <div class="topology-node agent-node">
+        <span class="node-orb">AI</span>
+        <span class="node-copy"><b>AI Agent</b><small>Requests a tool</small></span>
+      </div>
+      <div class="route route-in"><span class="route-label">tool call</span><i></i></div>
+      <div class="topology-node gateway-node">
+        <span class="node-orb">J</span>
+        <span class="node-copy"><b>Jac Gateway</b><small id="lab-active-gate">Policy match</small></span>
+        <span class="gateway-verdict" id="lab-gateway-verdict">CHECKING</span>
+      </div>
+      <div class="route route-out"><span class="route-label">controlled call</span><i></i></div>
+      <div class="topology-node service-node">
+        <span class="node-orb" id="lab-service-icon">GH</span>
+        <span class="node-copy"><b id="lab-service-name">GitHub MCP</b><small id="lab-service-state">Protected</small></span>
+      </div>
+    </section>
+
+    <section class="pipeline-strip card" aria-label="Jac enforcement graph">
+      <div class="pipeline-title">
+        <span>Jac enforcement graph</span>
+        <small>The first violation stops the walker immediately</small>
+      </div>
+      <div class="pipeline-gates" id="lab-gates">
+        <span data-gate="session">1&nbsp; Session gate</span>
+        <i>→</i>
+        <span data-gate="policy">2&nbsp; Policy match</span>
+        <i>→</i>
+        <span data-gate="constraint">3&nbsp; Constraints</span>
+        <i>→</i>
+        <span data-gate="sequence">4&nbsp; Sequence + taint</span>
+        <i>→</i>
+        <span data-gate="action">5&nbsp; Action</span>
+        <i>→</i>
+        <span data-gate="response">6&nbsp; Response DLP</span>
+      </div>
+    </section>
+
+    <section class="story-layout">
+      <aside class="story-timeline card">
+        <div class="story-head">
+          <div>
+            <span class="eyebrow">Live incident timeline</span>
+            <h2 id="lab-scenario-title">New GitHub agent session</h2>
+          </div>
+          <span class="severity severity-analyzing" id="lab-severity">ANALYZING</span>
+        </div>
+        <div class="timeline-list" id="lab-timeline"></div>
+      </aside>
+
+      <section class="story-stage card">
+        <div class="stage-overline" id="lab-stage-overline">PREVENTION · BEFORE THE ATTACK</div>
+        <h2 id="lab-step-title">Dangerous capabilities disappear</h2>
+        <p class="stage-explainer" id="lab-explainer"></p>
+
+        <div class="call-card">
+          <div>
+            <span class="call-label">Agent action</span>
+            <strong class="mono" id="lab-tool">tools/list</strong>
+          </div>
+          <span class="call-arrow">→</span>
+          <div>
+            <span class="call-label">Jac outcome</span>
+            <strong id="lab-outcome">3 dangerous tools removed</strong>
+          </div>
+        </div>
+
+        <div class="plain-language">
+          <span class="plain-icon">i</span>
+          <div>
+            <strong>Why this matters</strong>
+            <p id="lab-why"></p>
+          </div>
+        </div>
+
+        <div class="payload-compare" id="lab-payload" hidden>
+          <div>
+            <span>Unsafe result detected</span>
+            <code id="lab-payload-before"></code>
+          </div>
+          <div class="payload-safe">
+            <span>What the model receives</span>
+            <code id="lab-payload-after"></code>
+          </div>
+        </div>
+
+        <div class="player-controls">
+          <button class="player-btn" id="lab-prev" aria-label="Previous attack step">←</button>
+          <button class="player-btn play-btn" id="lab-play">▶ Start new session</button>
+          <button class="player-btn" id="lab-next" aria-label="Next attack step">→</button>
+          <button class="player-btn text-btn" id="lab-restart">New run</button>
+          <label class="speed-control">
+            Speed
+            <select id="lab-speed" aria-label="Simulation speed">
+              <option value="3200">1×</option>
+              <option value="1900">1.5×</option>
+              <option value="1100">2×</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <aside class="decision-panel">
+        <section class="card decision-card">
+          <div class="decision-head">
+            <span class="eyebrow">Policy invoked</span>
+            <span class="decision-pill decision-hide" id="lab-policy-action">HIDE</span>
+          </div>
+          <h3 id="lab-policy-name">Capability minimization</h3>
+          <code id="lab-policy-rule">tools/list → filter deny-only tools</code>
+          <p id="lab-policy-reason"></p>
+        </section>
+
+        <section class="card evidence-card">
+          <div class="decision-head">
+            <span class="eyebrow">Proof</span>
+            <span class="proof-status" id="lab-proof-status">VERIFIED</span>
+          </div>
+          <div class="evidence-row">
+            <span>Reached upstream?</span>
+            <strong id="lab-proof-upstream">No</strong>
+          </div>
+          <div class="evidence-row">
+            <span>Audit payload stored?</span>
+            <strong>No — counts only</strong>
+          </div>
+          <div class="evidence-row">
+            <span>Policies evaluated</span>
+            <strong id="lab-policy-count">1</strong>
+          </div>
+          <div class="evidence-detail" id="lab-evidence"></div>
+        </section>
+
+        <section class="card legend-card">
+          <span class="legend-item"><i class="legend-allow"></i> Safe work continued</span>
+          <span class="legend-item"><i class="legend-transform"></i> Made safe</span>
+          <span class="legend-item"><i class="legend-block"></i> Attack stopped</span>
+        </section>
+      </aside>
+    </section>
+  </main>
+
   <main class="view" id="view-live">
+    <div class="live-context">
+      <span class="live-context-dot"></span>
+      <div>
+        <span>Evidence replay</span>
+        <strong id="live-session-name">Selecting the strongest incident session…</strong>
+      </div>
+      <span id="live-session-detail">Waiting for audit data</span>
+    </div>
     <div class="metrics">
       <div class="metric">
         <div class="metric-label">Risk score</div>

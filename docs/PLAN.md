@@ -11,6 +11,35 @@ L ≈ 4+ sessions.
 
 **➡️ You are here: Phases 0–5 COMPLETE; Phase 6a (connector framework) COMPLETE 2026-07-25. In progress, in parallel: Phase 6b (GitHub pack) and Phase 8 (Slack pack).**
 
+## Hackathon track — Jac enforcement engine
+
+The hackathon build is intentionally hybrid: Jac owns the security decisions
+and graph-persistent session controls, while the established Python project
+continues to provide production transports, the console, storage adapters, and
+optional integrations.
+
+- [x] Promote the supplied Jac handoff into a top-level `jac/` project
+- [x] Repair the Jac 0.16.7 type and walker errors
+- [x] Express the pipeline as graph nodes traversed by `CallWalker`
+- [x] Port policy matching, constraints, rewrites, taint/risk, redaction, and audit
+- [x] Add an in-process prompt-injection/exfiltration demo
+- [x] Add nine core Jac golden tests
+- [x] Add a real Jac stdio wrapper around `demo/mock_server.py`
+- [x] Add an end-to-end wrapper harness proving redaction, blocking, and safe audit
+- [x] Add high-severity GitHub and critical Slack multi-control policies
+- [x] Add deterministic GitHub/Slack MCP servers and a one-command stage harness
+- [x] Add eight advanced attack goldens (17 Jac tests total)
+- [x] Add a judge-facing demo runbook and counts-only evidence bundle
+- [x] Upgrade the Ops Console with a graphical GitHub/Slack Attack Lab
+- [x] Teach Live Ops and Sessions to read the Jac nested audit schema
+- [ ] Optional: add guarded `by llm()` anomaly scoring after the deterministic demo
+- [ ] Optional: expose the Jac engine through `jac start` for central-service mode
+
+**Hackathon exit criteria: MET.** `jac check` passes; all 17 Jac tests pass;
+both advanced attack chains run through the real stdio wrapper; secrets and PII
+are redacted; and upstream-call logs prove blocked mutations and exfiltration
+attempts never reached their MCP servers.
+
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
 `open`/`closed`, or per-category `pipeline`/`redaction`/`approval`; default

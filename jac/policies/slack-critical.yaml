@@ -1,0 +1,163 @@
+schema_version: 1
+name: slack-critical-exfiltration
+default_action: block
+
+risk:
+  elevated: 30
+  suspended: 60
+  weights:
+    policy_block: 15
+    constraint_violation: 15
+    taint_block: 25
+    sequence_block: 25
+    approval_denied: 20
+    heavy_redaction: 5
+
+taint_sources:
+  - read_channel
+  - read_thread
+  - search_messages
+  - read_file
+  - read_canvas
+  - fetch_user_info
+  - search_users
+
+taint_sinks:
+  - send_message
+  - draft_message
+  - create_conversation
+  - create_canvas
+  - update_canvas
+
+sequence_rules:
+  - after: read_channel
+    forbid: send_message
+    reason: no outbound message after reading untrusted channel content
+  - after: search_messages
+    forbid: send_message
+    reason: no outbound message after a workspace-wide sensitive search
+  - after: search_messages
+    forbid: create_conversation
+    reason: a searched session may not manufacture a new DM exfiltration route
+  - after: read_file
+    forbid: create_canvas
+    reason: quarantined file content may not be copied into a new canvas
+
+tools:
+  search_channels:
+    action: allow
+    reason: channel metadata only; content requires a separate guarded read
+
+  search_emoji:
+    action: allow
+    reason: emoji metadata is low sensitivity
+
+  list_channel_members:
+    action: allow
+    reason: opaque member identifiers only
+
+  search_users:
+    action: redact
+    redaction: standard
+    reason: directory results contain email and phone data
+    roles:
+      workspace-admin:
+        action: allow
+        reason: workspace administrators are entitled to directory data
+      bot:
+        action: redact
+        redaction: strict
+        reason: headless callers receive strict masking
+
+  fetch_user_info:
+    action: redact
+    redaction: strict
+    reason: profiles contain PII and attacker-controlled custom fields
+
+  read_channel:
+    action: redact
+    redaction: strict
+    reason: free-form Slack content may contain prompt injection and secrets
+    constraints:
+      - arg: channel
+        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
+        flags: i
+        reason: sensitive channel is outside the agent's approved scope
+
+  read_thread:
+    action: redact
+    redaction: strict
+    reason: thread replies are untrusted free-form content
+
+  search_messages:
+    action: redact
+    redaction: strict
+    reason: workspace-wide search crosses channel boundaries and must be scrubbed
+
+  read_canvas:
+    action: redact
+    redaction: strict
+    reason: canvases hold runbooks, customer data, and pasted credentials
+
+  read_file:
+    action: quarantine
+    reason: arbitrary file content cannot be safely reduced to a useful partial view
+    roles:
+      workspace-admin:
+        action: redact
+        redaction: strict
+        reason: administrators receive scrubbed file content
+
+  send_message:
+    action: require_approval
+    then: allow
+    reason: messages and DMs are primary data-exfiltration paths
+    constraints:
+      - arg: channel
+        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
+        flags: i
+        reason: agents may not post into a sensitive channel
+    roles:
+      bot:
+        action: block
+        reason: headless callers have no human approver
+
+  draft_message:
+    action: require_approval
+    then: allow
+    reason: drafts are treated as egress until delivery behavior is verified
+    roles:
+      bot:
+        action: block
+        reason: headless callers may not create outbound drafts
+
+  create_conversation:
+    action: require_approval
+    then: allow
+    reason: a new DM can manufacture an unmonitored external route
+    roles:
+      bot:
+        action: block
+        reason: headless callers may not create conversations
+
+  create_canvas:
+    action: require_approval
+    then: allow
+    reason: canvas creation is an outbound content write
+    roles:
+      bot:
+        action: block
+        reason: headless callers may not create canvases
+
+  update_canvas:
+    action: require_approval
+    then: allow
+    reason: updating a trusted runbook can poison future readers
+    roles:
+      bot:
+        action: block
+        reason: headless callers may not overwrite canvases
+
+  add_reaction:
+    action: allow
+    reason: reaction bandwidth is too low to justify blocking normal use

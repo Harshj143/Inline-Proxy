@@ -1,0 +1,132 @@
+schema_version: 1
+name: github-high-supply-chain
+default_action: block
+
+risk:
+  elevated: 30
+  suspended: 80
+  weights:
+    policy_block: 15
+    constraint_violation: 20
+    taint_block: 30
+    sequence_block: 30
+    approval_denied: 25
+    heavy_redaction: 10
+
+# PRs and issues are attacker-controlled. Once read, the session may continue
+# reading but may not mutate source, CI, or releases.
+taint_sources:
+  - get_pull_request
+  - get_issue
+
+taint_sinks:
+  - push_files
+  - create_or_update_file
+  - create_pull_request
+  - run_workflow
+  - create_release
+
+sequence_rules:
+  - after: get_pull_request
+    forbid: push_files
+    reason: no repository write after consuming attacker-controlled pull-request content
+  - after: get_job_logs
+    forbid: run_workflow
+    reason: no workflow execution after reading secret-adjacent CI logs
+  - after: get_job_logs
+    forbid: create_release
+    reason: no release publication after reading secret-adjacent CI logs
+
+tools:
+  search_code:
+    action: allow
+    reason: read-only code discovery in approved repositories
+
+  get_pull_request:
+    action: redact
+    redaction: strict
+    reason: pull-request text is attacker-controlled and may contain secrets
+
+  get_issue:
+    action: redact
+    redaction: strict
+    reason: issue text is attacker-controlled and taints the session
+
+  get_job_logs:
+    action: redact
+    redaction: strict
+    reason: CI logs routinely contain credentials and personal data
+    roles:
+      security-reviewer:
+        action: redact
+        redaction: strict
+        reason: reviewers receive scrubbed logs with entity counts
+      bot:
+        action: quarantine
+        reason: headless automation may not ingest raw CI logs
+
+  get_file_contents:
+    action: redact
+    redaction: strict
+    reason: repository files may contain committed credentials
+
+  push_files:
+    action: allow
+    reason: developer writes are limited to approved repositories and non-protected branches
+    constraints:
+      - arg: owner_repo
+        must_match: '^acme/(payments|platform)$'
+        reason: repository is outside the approved acme organization allowlist
+      - arg: branch
+        must_not_match: '^(main|master|release|production)$'
+        flags: i
+        reason: direct writes to protected branches are forbidden
+    roles:
+      bot:
+        action: block
+        reason: headless automation may not push source changes
+
+  create_or_update_file:
+    action: allow
+    reason: file writes are restricted to approved repositories and agent branches
+    constraints:
+      - arg: owner_repo
+        must_match: '^acme/(payments|platform)$'
+        reason: repository is outside the approved acme organization allowlist
+      - arg: branch
+        must_match: '^agent/[a-z0-9._/-]+$'
+        flags: i
+        reason: agent file changes must target an isolated agent branch
+
+  create_pull_request:
+    action: rewrite
+    reason: pull requests are permitted only as drafts for human review
+    constraints:
+      - arg: owner_repo
+        must_match: '^acme/(payments|platform)$'
+        reason: pull request targets an unapproved repository
+      - arg: head
+        must_match: '^agent/[a-z0-9._/-]+$'
+        flags: i
+        reason: pull request must originate from an isolated agent branch
+    rewrites:
+      - arg: draft
+        set: "true"
+    roles:
+      bot:
+        action: block
+        reason: headless automation may not open pull requests
+
+  run_workflow:
+    action: require_approval
+    then: allow
+    reason: workflow execution can expose deployment credentials
+
+  create_release:
+    action: require_approval
+    then: allow
+    reason: release publication is a supply-chain boundary requiring a human
+
+  delete_repository:
+    action: block
+    reason: repository deletion is never available to agent identities
