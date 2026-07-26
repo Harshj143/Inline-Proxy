@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MCP Security Gateway — Console</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Login gate. The page is public; every API call it makes is cookie-gated. -->
+  <section id="login" class="login hidden">
+    <form id="login-form" class="card">
+      <h1>Security Ops Console</h1>
+      <p class="muted">Sign in to view the audit feed and resolve approvals.</p>
+      <label>User <input name="username" autocomplete="username" required /></label>
+      <label>Password <input name="password" type="password"
+             autocomplete="current-password" required /></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="error hidden"></p>
+    </form>
+  </section>
+
+  <!-- Main app, shown after auth. -->
+  <div id="app" class="hidden">
+    <header>
+      <strong>MCP Security Gateway</strong>
+      <nav id="tabs">
+        <button data-tab="feed" class="active">Live feed</button>
+        <button data-tab="sessions">Sessions</button>
+        <button data-tab="approvals">Approvals <span id="pending-badge" class="badge hidden">0</span></button>
+        <button data-tab="policy">Policy</button>
+        <button data-tab="backtest">Backtest</button>
+      </nav>
+      <span class="spacer"></span>
+      <span id="whoami" class="muted"></span>
+      <button id="logout" class="link">Sign out</button>
+    </header>
+
+    <main>
+      <!-- Live feed -->
+      <section data-panel="feed">
+        <div class="toolbar">
+          <span id="feed-status" class="muted">connecting…</span>
+          <button id="feed-clear" class="link">clear</button>
+        </div>
+        <table class="events"><tbody id="feed-rows"></tbody></table>
+      </section>
+
+      <!-- Sessions -->
+      <section data-panel="sessions" class="hidden">
+        <div class="split">
+          <div class="list"><table><thead><tr>
+            <th>session</th><th>events</th><th>allowed</th><th>blocked</th><th>risk</th><th>flags</th>
+          </tr></thead><tbody id="sessions-rows"></tbody></table></div>
+          <div id="session-detail" class="detail muted">Select a session to replay it.</div>
+        </div>
+      </section>
+
+      <!-- Approvals -->
+      <section data-panel="approvals" class="hidden">
+        <p class="muted">Tool calls waiting on a human decision. Resolving requires the approver role.</p>
+        <div id="approvals-list"></div>
+      </section>
+
+      <!-- Policy -->
+      <section data-panel="policy" class="hidden">
+        <div id="policy-view" class="muted">Loading…</div>
+      </section>
+
+      <!-- Backtest -->
+      <section data-panel="backtest" class="hidden">
+        <p class="muted">Replay recorded calls through a candidate policy (JSON) to see the blast radius.</p>
+        <textarea id="backtest-input" spellcheck="false"
+          placeholder='{"schema_version":1,"default_action":"block","tools":{"crm.get":{"action":"allow"}}}'></textarea>
+        <div class="toolbar"><button id="backtest-run">Run backtest</button></div>
+        <div id="backtest-result"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
