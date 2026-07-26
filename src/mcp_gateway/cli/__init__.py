@@ -60,11 +60,25 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     wrap.add_argument(
+        "--connector",
+        default=None,
+        metavar="NAME",
+        help="use a named connector pack's policy (see `connectors list`); "
+        "layer extra files with --override, or use --policy instead",
+    )
+    wrap.add_argument(
         "--policy",
         action="append",
-        required=True,
         metavar="FILE",
-        help="policy file (YAML or JSON); repeat to layer, later files override",
+        help="policy file (YAML or JSON); repeat to layer, later files override. "
+        "Required unless --connector is given",
+    )
+    wrap.add_argument(
+        "--override",
+        action="append",
+        metavar="FILE",
+        help="extra policy file layered on top of --connector/--policy "
+        "(customize a pack without forking it); repeat to layer",
     )
     wrap.add_argument("--audit", default="audit.log", help="audit spool path (JSONL)")
     wrap.add_argument(
@@ -179,6 +193,28 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="who is performing the detokenization (audited)")
     detok.add_argument("token", metavar="TOKEN")
 
+    connectors = sub.add_parser(
+        "connectors",
+        help="list, inspect, and scaffold connector packs",
+        description=(
+            "A connector is a curated security pack for one MCP server. Packs are "
+            "discovered by name across the connector search paths."
+        ),
+    )
+    connectors_sub = connectors.add_subparsers(dest="connectors_command", required=True)
+    connectors_sub.add_parser("list", help="list available connector packs")
+    c_show = connectors_sub.add_parser("show", help="print a connector's manifest + inventory")
+    c_show.add_argument("name", metavar="NAME")
+    c_show.add_argument("--json", action="store_true", help="machine-readable output")
+    c_new = connectors_sub.add_parser(
+        "scaffold", help="generate a new connector skeleton to author from"
+    )
+    c_new.add_argument("name", metavar="NAME")
+    c_new.add_argument("--dir", default="connectors", metavar="DIR",
+                       help="parent directory for the new connector (default: connectors/)")
+    c_new.add_argument("--force", action="store_true",
+                       help="overwrite an existing non-empty connector directory")
+
     sub.add_parser("version", help="print the gateway version")
     return parser
 
@@ -208,6 +244,26 @@ def _open_vault(path: str | None):
     return EncryptedSqliteVault(path, kek)
 
 
+def _build_wrap_engine(ns: argparse.Namespace) -> PolicyEngine:
+    """Resolve --connector/--policy (+ --override) into one PolicyEngine.
+
+    A connector contributes its policy layers first; --policy layers follow; then
+    --override layers last, so a deployment tightens or relaxes a pack's rules
+    without forking it. Requires at least one of --connector/--policy.
+    """
+    overrides = list(ns.override or [])
+    if ns.connector:
+        from mcp_gateway.connectors import find_connector
+
+        connector = find_connector(ns.connector)  # ConnectorError if unknown/malformed
+        layers = [*connector.policy_layers(), *(ns.policy or []), *overrides]
+    elif ns.policy:
+        layers = [*ns.policy, *overrides]
+    else:
+        raise GatewayError("wrap: provide --connector NAME or --policy FILE")
+    return PolicyEngine.load(layers)
+
+
 # --------------------------------------------------------------------- wrap
 def _run_wrap(ns: argparse.Namespace) -> int:
     upstream_cmd = ns.upstream_cmd
@@ -218,7 +274,7 @@ def _run_wrap(ns: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
 
-    engine = PolicyEngine.load(ns.policy)
+    engine = _build_wrap_engine(ns)
     recorder = AuditRecorder([JsonlSpool(ns.audit)])
     roles = (ns.role,) if ns.role else ()
 
@@ -382,11 +438,63 @@ def _run_detokenize(ns: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------- connectors
+def _run_connectors_list(ns: argparse.Namespace) -> int:
+    from mcp_gateway.connectors import list_connectors
+
+    found = list_connectors()
+    if not found:
+        print("no connectors found", file=sys.stderr)
+        return 0
+    width = max(len(c.name) for c in found)
+    for c in found:
+        print(f"  {c.name:<{width}}  {c.description}")
+    return 0
+
+
+def _run_connectors_show(ns: argparse.Namespace) -> int:
+    from mcp_gateway.connectors import find_connector
+
+    connector = find_connector(ns.name)  # ConnectorError → exit 1
+    description = connector.describe()
+    if ns.json:
+        print(json.dumps(description, indent=2))
+        return 0
+    print(f"name:        {description['name']}")
+    print(f"description: {description['description']}")
+    print(f"path:        {description['path']}")
+    if description["upstream"]:
+        print(f"upstream:    {description['upstream']}")
+    if description["launch"]:
+        print(f"launch:      {' '.join(description['launch'])}")
+    print(f"tools:       {description['tool_count']} ({description['tools_by_risk']})")
+    print(f"tests:       {'yes' if description['has_tests'] else 'no'}")
+    return 0
+
+
+def _run_connectors_scaffold(ns: argparse.Namespace) -> int:
+    from mcp_gateway.connectors.scaffold import scaffold_connector
+
+    target = scaffold_connector(ns.name, ns.dir, force=ns.force)
+    print(f"created connector {ns.name!r} at {target}")
+    print(f"  validate: mcp-gateway policy validate {target}/policy.yaml")
+    print(f"  test:     mcp-gateway policy test --policy {target}/policy.yaml "
+          f"--tests {target}/policy_tests.yaml")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ns = _build_parser().parse_args(argv)
     try:
         if ns.command == "wrap":
             return _run_wrap(ns)
+        if ns.command == "connectors":
+            if ns.connectors_command == "list":
+                return _run_connectors_list(ns)
+            if ns.connectors_command == "show":
+                return _run_connectors_show(ns)
+            if ns.connectors_command == "scaffold":
+                return _run_connectors_scaffold(ns)
         if ns.command == "detokenize":
             return _run_detokenize(ns)
         if ns.command == "policy":

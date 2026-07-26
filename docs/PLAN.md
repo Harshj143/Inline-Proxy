@@ -184,7 +184,33 @@ and is policed identically to sidecar mode; two replicas share taint/risk via Re
 
 ## Phase 6 — Connector framework + GitHub pack (size: L)
 
-- [ ] `connectors/base.py` + registry + `mcp-gateway add <name>`; override file mechanism
+Split so the framework lands first and unblocks parallel pack authoring
+(GitHub + Slack can then proceed independently — see Phase 8).
+
+### Phase 6a — Connector framework ✅ DONE (2026-07-25)
+
+- [x] `connectors/base.py` — `Connector` (validated directory bundle → ordered
+      policy layers), `load_connector` fail-closed on missing manifest/policy or
+      name≠dir; `ConnectorError`
+- [x] `connectors/registry.py` — discovery across search paths ($MCPG_CONNECTORS_DIR
+      → user dir → bundled `connectors/`), first-match precedence, tolerant `list`
+      vs precise-error `find`
+- [x] `connectors/scaffold.py` + `mcp-gateway connectors scaffold` — generates a
+      complete default-deny skeleton that loads, validates, and passes its goldens;
+      `connectors/example/` committed as the reference (generated from the templates)
+- [x] CLI: `connectors list | show | scaffold`; `wrap --connector NAME` with
+      `--override FILE` layering (customize a pack without forking) — reuses the
+      Phase 1 layered merge; either `--connector` or `--policy` required
+- [x] 18 tests (load/validate, registry precedence, scaffold, override layering,
+      CLI); `CLAUDE.md` + `docs/CONTRIBUTING.md` (collaboration + authoring guide)
+
+Deferred (scoped, not cut): per-connector Python plugins (`constraints.py` /
+`detectors.py` dynamic import) — a trust decision of its own; packs use the
+builtin registered constraints/detectors for now. Bundling packs into the
+installed wheel is a Phase 12 packaging task.
+
+### Phase 6b — GitHub pack (size: M) — parallelizable
+
 - [ ] GitHub pack per ARCHITECTURE §4: full `tools.yaml` inventory (risk-classified), `policy.yaml`
       (reads redacted, CI logs quarantined, writes approval-gated, destructive blocked, default-deny)
 - [ ] Taint model: issue/PR bodies + comments = sources; push/PR/comment/gist = sinks

@@ -21,3 +21,11 @@ class PolicyError(GatewayError):
 
 class TransportError(GatewayError):
     """The transport failed in a way that ends the session."""
+
+
+class ConnectorError(GatewayError):
+    """A connector pack is missing, malformed, or references an unknown name.
+
+    Raised at load/resolve time only, like PolicyError: the gateway refuses to
+    bind an ill-formed connector rather than guessing at its security intent.
+    """

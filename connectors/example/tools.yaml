@@ -1,0 +1,9 @@
+# Tool inventory for the example MCP server, risk-classified.
+#
+# Informational: this documents and reviews the attack surface; policy.yaml is
+# what enforces. Every tool the server exposes should appear here with a risk:
+#   read | write | destructive | secret_adjacent
+tools:
+  example.ping:
+    risk: read
+    description: liveness check

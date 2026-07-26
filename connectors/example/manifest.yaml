@@ -1,0 +1,13 @@
+# Connector manifest — what this pack protects and how to launch it.
+# See docs/CONTRIBUTING.md for the authoring guide.
+name: example
+description: "Security pack for the example MCP server"
+upstream:
+  server: example-mcp-server
+  # The package or binary that starts the real MCP server (fill in):
+  package: ""
+  # Upstream versions this pack was validated against (fill in):
+  tested_versions: []
+# Template command the gateway launches in sidecar mode, e.g.
+#   ["npx", "-y", "@modelcontextprotocol/server-example"]
+launch: []
