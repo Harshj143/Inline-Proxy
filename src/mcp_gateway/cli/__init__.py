@@ -238,6 +238,10 @@ def _build_parser() -> argparse.ArgumentParser:
                        "(random per-process if unset — sessions won't survive restart)")
     serve.add_argument("--gateway-token-env", default=None, metavar="VAR",
                        help="env var holding a shared token required on POST /api/approvals")
+    serve.add_argument("--allow-insecure-approvals", action="store_true",
+                       help="permit the cookieless POST /api/approvals with no "
+                       "--gateway-token-env on a non-loopback --host (use only when the "
+                       "endpoint is already protected by an upstream proxy)")
     serve.add_argument("--approval-timeout", type=float, default=300.0, metavar="SECONDS")
 
     hashpw = console_sub.add_parser(
@@ -466,7 +470,7 @@ def _run_console_serve(ns: argparse.Namespace) -> int:
         import uvicorn
 
         from mcp_gateway.console.app import create_app
-        from mcp_gateway.console.auth import CookieSigner
+        from mcp_gateway.console.auth import CookieSigner, is_loopback_host
     except ModuleNotFoundError:
         raise GatewayError(
             "the console needs the [server] extra: pip install 'mcp-gateway[server]'"
@@ -475,6 +479,25 @@ def _run_console_serve(ns: argparse.Namespace) -> int:
     users = _load_users_file(ns.users)
     if len(users) == 0:
         raise GatewayError(f"{ns.users}: no users defined — the console would be unusable")
+
+    # Fail closed on an exposed approvals endpoint. POST /api/approvals is the
+    # gateway-facing, cookieless contract; without a shared token it is guarded
+    # only by being unreachable. Binding a non-loopback host without a token (and
+    # without an explicit override) would let anyone on the network flood the
+    # approval queue, so refuse to start rather than open that quietly.
+    gateway_token = os.environ.get(ns.gateway_token_env) if ns.gateway_token_env else None
+    if (
+        gateway_token is None
+        and not is_loopback_host(ns.host)
+        and not ns.allow_insecure_approvals
+    ):
+        raise GatewayError(
+            f"console serve --host {ns.host} would expose the cookieless approvals "
+            f"endpoint (POST /api/approvals) to the network with no shared token, so "
+            f"anyone reachable could flood the approval queue. Set --gateway-token-env "
+            f"NAME (with the token in $NAME), or pass --allow-insecure-approvals if the "
+            f"endpoint is already protected by an upstream proxy."
+        )
 
     secret = os.environ.get(ns.secret_env)
     if secret:
@@ -490,7 +513,6 @@ def _run_console_serve(ns: argparse.Namespace) -> int:
         )
 
     engine = PolicyEngine.load(ns.policy) if ns.policy else None
-    gateway_token = os.environ.get(ns.gateway_token_env) if ns.gateway_token_env else None
 
     app = create_app(
         index_path=ns.index,

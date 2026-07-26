@@ -9,6 +9,7 @@ from mcp_gateway.console.auth import (
     LocalUsers,
     User,
     hash_password,
+    is_loopback_host,
     verify_password,
 )
 
@@ -91,3 +92,17 @@ def test_cookie_expiry_fails_closed():
     token = signer.mint(User("alice", "viewer"), now=1000.0)
     assert signer.verify(token, now=1050.0) is not None   # within ttl
     assert signer.verify(token, now=2000.0) is None       # expired
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "LOCALHOST", "::1",
+                                  "[::1]", "127.5.0.1", " 127.0.0.1 "])
+def test_is_loopback_host_true(host):
+    assert is_loopback_host(host) is True
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "10.0.0.5",
+                                  "example.com", "gateway.internal", ""])
+def test_is_loopback_host_false(host):
+    # Anything not unambiguously loopback is network-exposed: the approvals guard
+    # must fail toward requiring a token, never toward opening the endpoint.
+    assert is_loopback_host(host) is False
