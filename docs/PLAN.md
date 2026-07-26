@@ -273,13 +273,37 @@ installed wheel is a Phase 12 packaging task.
 
 ### Phase 6b — GitHub pack (size: M) — parallelizable
 
-- [ ] GitHub pack per ARCHITECTURE §4: full `tools.yaml` inventory (risk-classified), `policy.yaml`
-      (reads redacted, CI logs quarantined, writes approval-gated, destructive blocked, default-deny)
-- [ ] Taint model: issue/PR bodies + comments = sources; push/PR/comment/gist = sinks
+- [x] **Complete inventory (2026-07-25):** all **109 tools** of `github-mcp-server`
+      **v1.7.0**, extracted from upstream source (`pkg/github/*.go`) rather than
+      hand-listed — `connectors/github/tools/extract_inventory.py` is committed so an
+      upgrade is a mechanical re-run + risk review. Risk split: 49 read / 50 write /
+      8 secret-adjacent / 2 destructive. MCP *resources* (ui_resources.go) correctly
+      excluded as non-tools
+- [x] `policy.yaml`: default-deny with an explicit rule for **every** tool — reads
+      `redact:standard`; security findings `redact:strict`; raw-secret reads
+      (`get_job_logs`, secret-scanning) `quarantine`; all 50 writes
+      `require_approval` (fail-closed with no approver); 2 destructive `block`
+- [x] Taint model: 14 sources (issue/PR/discussion/gist/file/code-search reads),
+      4 sinks (`create_gist`/`update_gist`/`push_files`/`create_or_update_file`) +
+      2 sequence rules (CI-logs/secret-alerts → gist)
+- [x] `roles.yaml`: developer (default) / reviewer (comment+review allowed, merge
+      still gated) / release-manager (merge+push+CI) / bot (writes BLOCKED — no
+      approver exists). No role escalates a destructive action (test-enforced)
+- [x] `policy_tests.yaml` — 23 goldens across every risk class + role; README with
+      the full threat model (why GitHub is its own exfil channel), per-toolset table,
+      override recipe, upgrade procedure
+- [x] `tests/unit/test_github_pack.py` — 11 tests incl. **every tool has an explicit
+      rule** (no silent default-deny), action⇄risk agreement, bot/destructive
+      invariants, inventory-count guard. 342 passed / 5 skipped, ruff clean
 - [ ] `constraints.py`: org allowlist, protected branches; rewrites: draft PRs, search caps
-- [ ] `detectors.py`: PAT patterns, Actions-log secrets; `roles.yaml`: developer/reviewer/release-manager/bot
-- [ ] `policy_tests.yaml` goldens for every rule; pack README with threat model
-- [ ] E2E demo: poisoned-issue → attempted exfil PR, blocked; recorded as acceptance test
+- [ ] E2E demo: poisoned-issue → attempted exfil gist, blocked; recorded as acceptance test
+
+Deferred within 6b (needs the framework's per-connector plugin loading, itself
+deferred in 6a): pack-local `constraints.py` / `detectors.py` (org allowlist,
+protected-branch checks, PAT + Actions-log detectors). The gateway's builtin
+regex constraints and the redaction engine's GitHub-PAT/secret detectors already
+cover the critical paths; the pack-local plugins are refinement, not a gap in
+enforcement.
 
 **Exit criteria:** real `github-mcp-server` policed end-to-end; the pack is the
 documented template for all future connectors.
