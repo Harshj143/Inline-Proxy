@@ -9,7 +9,7 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–5 COMPLETE (Phase 5 — Streamable HTTP + central mode, 2026-07-23). Next: Phase 6 — Connector framework + GitHub pack.**
+**➡️ You are here: Phases 0–5 COMPLETE; Phase 6a (connector framework) COMPLETE 2026-07-25. In progress, in parallel: Phase 6b (GitHub pack) and Phase 8 (Slack pack).**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -162,8 +162,6 @@ human approvals + behavioral monitoring, all feeding one risk score.
 
 ## Phase 4 — Console v2 (size: M)
 
-**➡️ You are here (2026-07-23): Phase 4 in progress. Split into 4a/4b/4c below.**
-
 Split rationale: 4a is pure stdlib (sqlite3) and fully unit-testable with no
 server dependency, so it lands first and the whole console reads from it. 4b
 adds the FastAPI app (`[server]` extra) over that index. 4c is the browser UI.
@@ -288,8 +286,27 @@ documented template for all future connectors.
 
 - [ ] Jira: JQL constraint plugin (project allowlist, forbid unbounded sweeps), `maxResults` rewrite,
       customer-PII redaction profile, JSM content = taint source, roles support-agent/project-admin/bot, goldens
-- [ ] Slack: channel-ACL constraints (block `#exec`, `#hr-*` reads), history redaction (PII+secrets),
-      post = approval to external/shared channels, `rate_limit` action (new ActionHandler), taint private-read → post, goldens
+- Slack (`connectors/slack/`, in progress — targets Slack's **first-party** server at
+  `mcp.slack.com`, chosen over the archived `@modelcontextprotocol/server-slack`):
+  - [x] 16-tool risk-classified `tools.yaml`; default-deny `policy.yaml`
+  - [x] Channel-ACL constraints (`exec`/`hr`/`legal`/`board`/`payroll`/`security`/`incident`)
+  - [x] History redaction — `strict` on conversational text, `standard` on profiles,
+        `quarantine` on `read_file` (opaque content has no useful partial view)
+  - [x] Writes approval-gated; `roles.yaml` (workspace-admin / support-agent / bot)
+  - [x] Taint read → send, with `sequence_rules` restating each exfiltration path
+  - [x] 31 goldens + 28 session-state tests (`tests/unit/test_slack_sequence.py`;
+        the golden harness cannot reach the sequence gate)
+  - [ ] **Blocked — tool identifiers unverified.** Slack documents capabilities in
+        prose, not `tools/call` ids, and the server is absent from the MCP registry.
+        Needs one `tools/list` against a live workspace (see the pack README).
+  - [ ] **Blocked — no remote upstream.** `transports/upstream.py` is
+        `SubprocessUpstream`-only; Slack's server is remote Streamable HTTP behind
+        OAuth. `wrap` works today only via an `mcp-remote` stdio↔HTTP bridge.
+        A native HTTP upstream is framework work, not pack work.
+  - [ ] `rate_limit` action — **deferred by decision**, raised as an issue rather than
+        built: it needs per-tool call timestamps on `Session` plus registry/schema/loader
+        edits, i.e. a framework change, which sits badly against this phase's own
+        "zero engine changes" exit criterion and collides with the GitHub pack's files.
 
 **Exit criteria (each):** real server policed e2e; pack authored purely with
 framework primitives — zero engine changes (that's the pluggability proof).

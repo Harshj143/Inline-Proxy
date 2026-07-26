@@ -1,0 +1,36 @@
+# Connector manifest — what this pack protects and how to launch it.
+# See docs/CONTRIBUTING.md for the authoring guide.
+name: slack
+description: "Security pack for Slack's first-party MCP server (mcp.slack.com)"
+
+upstream:
+  server: slack-mcp-server
+  # Slack's server is REMOTE and first-party: JSON-RPC 2.0 over Streamable
+  # HTTP at https://mcp.slack.com/mcp, authenticated with confidential OAuth
+  # 2.0 user tokens. There is no npm/PyPI package to install — the "package"
+  # is Slack's hosted endpoint.
+  package: "https://mcp.slack.com/mcp"
+  transport: streamable-http
+  auth: oauth2-confidential-user-token
+  # Slack requires the calling app to be directory-published or internal;
+  # unlisted apps are refused.
+  app_requirement: directory-published-or-internal
+
+  # ⚠️  EMPTY ON PURPOSE. This pack has not yet been validated against a live
+  # workspace. Filling this in is the gate described in README.md
+  # § "Verifying the inventory": run `tools/list`, reconcile the identifiers in
+  # tools.yaml and policy.yaml, then record the server version here.
+  tested_versions: []
+
+# Template command for sidecar (`wrap`) mode.
+#
+# ⚠️  The gateway cannot currently reach a remote MCP server directly:
+# transports/upstream.py implements SubprocessUpstream only, so `wrap` and
+# `serve` both expect to LAUNCH the upstream as a child process. Slack's server
+# is remote-only. The command below bridges the gap by running a stdio↔HTTP
+# proxy as that child process; it also owns the OAuth flow, which the gateway
+# has no way to perform. See README.md § "Deploying this pack".
+#
+# A native HTTP upstream is the cleaner answer and is tracked as framework
+# work, not pack work.
+launch: ["npx", "-y", "mcp-remote", "https://mcp.slack.com/mcp"]

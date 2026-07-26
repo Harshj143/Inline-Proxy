@@ -1,0 +1,111 @@
+# Tool inventory for the Slack MCP server, risk-classified.
+#
+# Informational: this documents and reviews the attack surface; policy.yaml is
+# what enforces. Every tool the server exposes should appear here with a risk:
+#   read | write | destructive | secret_adjacent
+#
+# ⚠️  PROVISIONAL TOOL IDENTIFIERS — see README.md § "Verifying the inventory".
+# Slack documents this server's capabilities in prose, not as `tools/call`
+# identifiers, and the server is not in the MCP registry. The names below are
+# derived from Slack's own capability table; they MUST be confirmed against a
+# live `tools/list` before this pack is trusted in production. A name that is
+# wrong simply never matches, and default-deny then blocks the real tool — the
+# failure direction is closed, but the pack is inert until the names are right.
+#
+# Why "secret_adjacent" is used so heavily here: Slack is where humans paste
+# things. API keys in an #incidents thread, a .env in a DM, a customer CSV in a
+# canvas. Unlike a database, the sensitivity of a Slack payload is not a
+# property of the tool — it is a property of whatever a human happened to type.
+# That is the core reason this pack leans on content inspection (redaction)
+# rather than on tool identity alone.
+
+tools:
+  # ---------------------------------------------------------------- discovery
+  # Low-sensitivity metadata. Channel names and topics are not secrets in most
+  # workspaces, but they are excellent reconnaissance: an agent that can
+  # enumerate #project-titan-acquisition learns something before reading a word.
+  search_channels:
+    risk: read
+    description: Find public/private channels, filtered by name and description.
+  search_emoji:
+    risk: read
+    description: List custom emoji in the workspace. Lowest-sensitivity tool here.
+
+  # ------------------------------------------------------------- people / PII
+  # Slack profiles carry email, phone, title, and arbitrary custom fields.
+  # Custom fields are attacker-controllable text in any shared/Connect
+  # workspace, which is why user lookups are taint sources as well as PII reads.
+  search_users:
+    risk: read
+    description: Find workspace members by name, email, or user ID.
+  fetch_user_info:
+    risk: read
+    description: Full profile for one user, including custom fields.
+  list_channel_members:
+    risk: read
+    description: User IDs belonging to a channel. Maps the org chart.
+
+  # --------------------------------------------------- message / file content
+  # The heart of the threat surface. Everything below returns free-form human
+  # text that may contain credentials, customer PII, or an injected instruction
+  # aimed at the agent reading it.
+  read_channel:
+    risk: secret_adjacent
+    description: Full message history for a channel.
+  read_thread:
+    risk: secret_adjacent
+    description: All replies in one thread.
+  search_messages:
+    risk: secret_adjacent
+    description: >-
+      Search messages AND files across the workspace, filtered by date, user,
+      and content type. The single most dangerous read: it crosses every
+      channel boundary at once, so a channel ACL that only guards read_channel
+      is trivially bypassed through search.
+  read_file:
+    risk: secret_adjacent
+    description: >-
+      Retrieve file content. Opaque and arbitrary — a keystore, a customer CSV,
+      a .env. Unlike conversational text, there is no useful partial view.
+  read_canvas:
+    risk: secret_adjacent
+    description: Export a canvas as markdown. Canvases hold runbooks and credentials.
+
+  # -------------------------------------------------------------- write / out
+  # Every tool below can move bytes out of the trust boundary, which makes each
+  # one an exfiltration sink once the session has read untrusted content.
+  send_message:
+    risk: write
+    description: >-
+      Deliver a message to any conversation — channel, DM, group DM. The
+      primary exfiltration sink: a DM to an attacker-controlled account leaves
+      the workspace instantly and is invisible to channel-level monitoring.
+  draft_message:
+    risk: write
+    description: >-
+      Draft, format, and preview a message in the client. Documented as
+      preview-only, but whether a draft can be delivered without a second human
+      action is NOT verifiable from the docs — treated as a sink until proven.
+  create_conversation:
+    risk: write
+    description: >-
+      Create a channel or DM. Creating a DM with an external/Connect user
+      manufactures an exfiltration path that no channel allowlist anticipated.
+  create_canvas:
+    risk: write
+    description: Create a canvas. Rich document creation — another content sink.
+  update_canvas:
+    risk: write
+    description: Modify an existing canvas. Can overwrite a runbook other humans trust.
+  add_reaction:
+    risk: write
+    description: >-
+      Apply an emoji reaction. Technically a covert channel (a few bits per
+      message) but far too low-bandwidth to be a practical exfiltration route.
+
+# ---------------------------------------------------------------- not present
+# Slack's documented capability set contains NO destructive tool — no message
+# deletion, no channel archival, no user deactivation. That is why this pack
+# ships no `block`-on-destructive rules: there is nothing to block. If a future
+# server version adds one it lands under default-deny automatically, which is
+# the correct default. Re-inventory on every upstream version bump.
