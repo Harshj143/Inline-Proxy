@@ -1,0 +1,17 @@
+# Golden decision tests for the example connector.
+# Run: mcp-gateway policy test \
+#        --policy connectors/example/policy.yaml \
+#        --tests connectors/example/policy_tests.yaml
+tests:
+  - name: ping is allowed
+    tool: example.ping
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: unknown tool meets default deny
+    tool: example.unknown_tool
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: default policy

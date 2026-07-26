@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=../../policies/policy.schema.json
+#
+# Default security policy for the example connector.
+#
+# DEFAULT-DENY: a tool is blocked unless a rule below permits it. Start from the
+# tool inventory in tools.yaml, classify each tool, and add rules that use the
+# least-powerful action that still works: allow < rewrite/redact < quarantine <
+# require_approval < block. See README.md for the threat model.
+schema_version: 1
+name: example
+default_action: block
+
+# Untrusted content that could carry an injected instruction should taint the
+# session; mutating/outbound tools become sinks blocked once tainted. Fill in:
+# taint_sources: []
+# taint_sinks: []
+# sequence_rules: []
+
+tools:
+  # Replace this example with the real tools (see tools.yaml for the inventory).
+  example.ping:
+    action: allow
+    reason: harmless liveness check, exposes no sensitive data
