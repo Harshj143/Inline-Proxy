@@ -151,6 +151,26 @@ class CookieSigner:
         return _b64(hmac.new(self._secret, body.encode("utf-8"), hashlib.sha256).digest())
 
 
+# --------------------------------------------------------------- host safety
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def is_loopback_host(host: str) -> bool:
+    """True only if binding `host` accepts connections from the local machine.
+
+    Decides whether the gateway-facing `POST /api/approvals` — machine-to-machine,
+    so cookieless — is safe without a shared token. Conservative by design: a
+    bind-all address (`0.0.0.0`/`::`), a LAN address, or any hostname is treated
+    as network-exposed. Only unambiguous loopback returns True, so a
+    misclassification fails toward *requiring* the token, never toward opening
+    the endpoint.
+    """
+    h = host.strip().lower()
+    if h.startswith("[") and h.endswith("]"):  # bracketed IPv6 literal, e.g. [::1]
+        h = h[1:-1]
+    return h in _LOOPBACK_HOSTS or h.startswith("127.")
+
+
 # ------------------------------------------------------------------- helpers
 def _b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
