@@ -97,6 +97,36 @@ def _outcome(action: str, deny_set: frozenset[str]) -> str:
     return "blocked" if action in deny_set else "allowed"
 
 
+def effective_deny_set() -> frozenset[str]:
+    """Actions that deny under a *service-backed* handler set.
+
+    `denying_actions()` is the fail-closed baseline of the bare registry, where
+    `redact` can only refuse because no `RedactionService` is wired. Any tool
+    that reasons about a real deployment's outcomes — the CI checks, the policy
+    differ — must score against the handlers a gateway actually runs, or every
+    `redact` rule reads as a denial and a policy full of them looks like a
+    lockout. Shared here so the two callers cannot drift apart.
+    """
+    from mcp_gateway.core.pipeline import build_action_handlers
+    from mcp_gateway.redaction.service import RedactionService
+
+    handlers = build_action_handlers(RedactionService())
+    return frozenset(name for name, h in handlers.items() if h.terminal_deny)
+
+
+def declared_roles(engine: PolicyEngine) -> list[str]:
+    """Every role any rule in `engine` overlays.
+
+    A policy's behavior is not one table but one per role, so anything that
+    enumerates a policy's decisions has to enumerate the role views too — a
+    change that only moves a role overlay is invisible otherwise.
+    """
+    roles: set[str] = set()
+    for rule in engine.describe().get("rules", []):
+        roles.update(rule.get("roles", {}))
+    return sorted(roles)
+
+
 def backtest_policy(
     audit_path: str | Path,
     engine: PolicyEngine,
