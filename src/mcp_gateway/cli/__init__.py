@@ -230,6 +230,64 @@ def _build_parser() -> argparse.ArgumentParser:
                            "now go through un-gated (opt-in gate; a diff only "
                            "reports by default)")
 
+    # policy bundle <build|verify|show> — versioned, signed policy artifacts.
+    bundle = policy_sub.add_parser(
+        "bundle",
+        help="build, sign, verify, and inspect versioned policy bundles",
+        description=(
+            "A bundle packages policy layers into one versioned, signed file the "
+            "gateway can verify before enforcing. Integrity (sha256 over the "
+            "payload) plus authenticity (Ed25519 signature over the manifest): a "
+            "bundle that was altered after signing is refused."
+        ),
+    )
+    bundle_sub = bundle.add_subparsers(dest="bundle_command", required=True)
+
+    b_build = bundle_sub.add_parser(
+        "build", help="package policy layers (or a connector) into a signed bundle"
+    )
+    b_build.add_argument("--connector", metavar="NAME",
+                         help="bundle a named connector pack's layers")
+    b_build.add_argument("--policy", action="append", metavar="FILE",
+                         help="policy layer(s) to bundle; repeat to layer (or use --connector)")
+    b_build.add_argument("--out", required=True, metavar="FILE",
+                         help="write the bundle here")
+    b_build.add_argument("--sign-key", metavar="FILE",
+                         help="Ed25519 private key PEM to sign with (unsigned if omitted)")
+    b_build.add_argument("--name", metavar="NAME",
+                         help="bundle name (defaults to the first layer's policy name)")
+    b_build.add_argument("--version", metavar="VERSION",
+                         help="bundle version (defaults to a timestamp + content hash)")
+
+    b_verify = bundle_sub.add_parser(
+        "verify", help="check a bundle's hash and signature (exit non-zero if bad)"
+    )
+    b_verify.add_argument("bundle", metavar="FILE")
+    b_verify.add_argument("--public-key", metavar="FILE",
+                          help="Ed25519 public key PEM to verify against; without it, "
+                               "only the content hash is checked (signature UNVERIFIED)")
+    b_verify.add_argument("--json", action="store_true", help="machine-readable output")
+
+    b_show = bundle_sub.add_parser(
+        "show", help="print a bundle's manifest and layer inventory"
+    )
+    b_show.add_argument("bundle", metavar="FILE")
+    b_show.add_argument("--json", action="store_true", help="machine-readable output")
+
+    keygen = policy_sub.add_parser(
+        "keygen",
+        help="generate an Ed25519 keypair for signing policy bundles",
+        description=(
+            "The private key signs bundles (keep it in CI secrets or a KMS); the "
+            "public key is what the gateway holds to verify. The gateway can never "
+            "forge policy — it only ever has the public half."
+        ),
+    )
+    keygen.add_argument("--out", required=True, metavar="PREFIX",
+                        help="writes PREFIX.pem (private) and PREFIX.pub.pem (public)")
+    keygen.add_argument("--force", action="store_true",
+                        help="overwrite existing key files")
+
     audit = sub.add_parser("audit", help="build and inspect the audit index")
     audit_sub = audit.add_subparsers(dest="audit_command", required=True)
     reindex = audit_sub.add_parser(
@@ -591,6 +649,119 @@ def _run_policy_diff(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _run_policy_keygen(ns: argparse.Namespace) -> int:
+    from mcp_gateway.policy.signing import (
+        generate_keypair,
+        private_key_to_pem,
+        public_key_to_pem,
+    )
+
+    priv_path = Path(f"{ns.out}.pem")
+    pub_path = Path(f"{ns.out}.pub.pem")
+    if not ns.force:
+        for p in (priv_path, pub_path):
+            if p.exists():
+                raise GatewayError(f"{p} exists (use --force to overwrite)")
+
+    key = generate_keypair()
+    # Private key gets 0600 — it can mint policy the whole fleet will enforce.
+    priv_path.write_bytes(private_key_to_pem(key))
+    os.chmod(priv_path, 0o600)
+    pub_path.write_bytes(public_key_to_pem(key.public_raw))
+    print(f"private key: {priv_path}  (keep secret; chmod 600)")
+    print(f"public key:  {pub_path}")
+    print(f"key id:      {key.key_id}")
+    return 0
+
+
+def _bundle_build_layers(ns: argparse.Namespace) -> list[Path]:
+    """Resolve --connector / --policy into the ordered layer paths to bundle."""
+    if ns.connector and ns.policy:
+        raise GatewayError("bundle build: use --connector or --policy, not both")
+    if ns.connector:
+        from mcp_gateway.connectors import find_connector
+
+        return list(find_connector(ns.connector).policy_layers())
+    if ns.policy:
+        return [Path(p) for p in ns.policy]
+    raise GatewayError("bundle build: provide --connector NAME or --policy FILE")
+
+
+def _run_policy_bundle_build(ns: argparse.Namespace) -> int:
+    from mcp_gateway.policy.bundle import build_bundle, sign_bundle
+    from mcp_gateway.policy.signing import load_signing_key
+
+    layers = _bundle_build_layers(ns)
+    bundle = build_bundle(layers, name=ns.name, version=ns.version)
+    if ns.sign_key:
+        bundle = sign_bundle(bundle, load_signing_key(ns.sign_key))
+        signed = f"signed by {bundle.signer_key_id}"
+    else:
+        signed = "UNSIGNED (add --sign-key to sign)"
+    bundle.write(ns.out)
+    print(f"wrote {ns.out}")
+    print(f"  name:    {bundle.name}")
+    print(f"  version: {bundle.version}")
+    print(f"  hash:    {bundle.content_hash}")
+    print(f"  {signed}")
+    return 0
+
+
+def _run_policy_bundle_verify(ns: argparse.Namespace) -> int:
+    from mcp_gateway.policy.bundle import load_bundle, verify_bundle
+    from mcp_gateway.policy.signing import load_verifying_key
+
+    bundle = load_bundle(ns.bundle)
+    key = load_verifying_key(ns.public_key) if ns.public_key else None
+    result = verify_bundle(bundle, key)
+
+    if ns.json:
+        print(json.dumps({
+            "name": bundle.name, "version": bundle.version,
+            "content_hash": bundle.content_hash,
+            "ok": result.ok, "integrity_ok": result.integrity_ok,
+            "signature_state": result.signature_state,
+            "reasons": list(result.reasons),
+        }, indent=2))
+    else:
+        print(f"bundle:  {bundle.name} {bundle.version}")
+        print(f"result:  {result.summary}")
+        for reason in result.reasons:
+            print(f"  - {reason}")
+        if key is None:
+            print("  (no --public-key: signature was not checked — inspection only)")
+
+    if key is None:
+        # Integrity-only: report but do not pass/fail on authenticity. A torn
+        # download is a failure; an unchecked signature is not this command's call.
+        return 0 if result.integrity_ok else 1
+    return 0 if result.ok else 1
+
+
+def _run_policy_bundle_show(ns: argparse.Namespace) -> int:
+    from mcp_gateway.policy.bundle import load_bundle, verify_bundle
+
+    bundle = load_bundle(ns.bundle)
+    integrity = verify_bundle(bundle)  # no key: hash only
+    if ns.json:
+        info = bundle.to_dict()["manifest"]
+        info["integrity_ok"] = integrity.integrity_ok
+        info["signed"] = bundle.signed
+        print(json.dumps(info, indent=2))
+        return 0
+
+    print(f"name:         {bundle.name}")
+    print(f"version:      {bundle.version}")
+    print(f"created:      {bundle.created}")
+    print(f"content hash: {bundle.content_hash}  "
+          f"({'ok' if integrity.integrity_ok else 'MISMATCH'})")
+    print(f"signed:       {'yes, by ' + bundle.signer_key_id if bundle.signed else 'no'}")
+    print("layers:")
+    for layer in bundle.layers:
+        print(f"  - {layer.name}  ({len(layer.text)} bytes)")
+    return 0
+
+
 def _run_audit_reindex(ns: argparse.Namespace) -> int:
     from mcp_gateway.audit.index import AuditIndex
 
@@ -859,6 +1030,15 @@ def main(argv: list[str] | None = None) -> int:
                 return _run_policy_ci(ns)
             if ns.policy_command == "diff":
                 return _run_policy_diff(ns)
+            if ns.policy_command == "keygen":
+                return _run_policy_keygen(ns)
+            if ns.policy_command == "bundle":
+                if ns.bundle_command == "build":
+                    return _run_policy_bundle_build(ns)
+                if ns.bundle_command == "verify":
+                    return _run_policy_bundle_verify(ns)
+                if ns.bundle_command == "show":
+                    return _run_policy_bundle_show(ns)
         if ns.command == "audit" and ns.audit_command == "reindex":
             return _run_audit_reindex(ns)
         if ns.command == "serve":
