@@ -13,6 +13,7 @@ Usage:
     mcp-gateway policy test --policy pack.yaml --tests pack.tests.yaml
     mcp-gateway policy backtest --policy new.yaml --audit audit.log
     mcp-gateway policy ci --root . --github
+    mcp-gateway policy diff --base /tmp/main-worktree --head . --markdown
     mcp-gateway audit reindex --audit audit.log --index audit.db
 """
 
@@ -204,6 +205,30 @@ def _build_parser() -> argparse.ArgumentParser:
     ci.add_argument("--github", action="store_true",
                     help="emit GitHub Actions error annotations and append a job "
                          "summary to $GITHUB_STEP_SUMMARY")
+
+    diff = policy_sub.add_parser(
+        "diff",
+        help="blast radius of a policy change: what two revisions decide differently",
+        description=(
+            "Compile every pack on both sides of a change and evaluate every "
+            "tool across every role view, then rank each difference on the "
+            "least-privilege ladder (allow < redact < quarantine < "
+            "require_approval < block). Answers what a YAML diff cannot: layered "
+            "merge, glob specificity, and role overlays mean a three-line edit "
+            "can move a hundred decisions."
+        ),
+    )
+    diff.add_argument("--base", required=True, metavar="DIR",
+                      help="repo root BEFORE the change (e.g. a git worktree of main)")
+    diff.add_argument("--head", default=".", metavar="DIR",
+                      help="repo root AFTER the change (default: .)")
+    diff.add_argument("--markdown", action="store_true",
+                      help="render as a PR comment body")
+    diff.add_argument("--json", action="store_true", help="machine-readable output")
+    diff.add_argument("--fail-on-crossing", action="store_true",
+                      help="exit non-zero if any decision that was refused would "
+                           "now go through un-gated (opt-in gate; a diff only "
+                           "reports by default)")
 
     audit = sub.add_parser("audit", help="build and inspect the audit index")
     audit_sub = audit.add_subparsers(dest="audit_command", required=True)
@@ -544,6 +569,28 @@ def _run_policy_ci(ns: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
 
+def _run_policy_diff(ns: argparse.Namespace) -> int:
+    from mcp_gateway.policy import diff as policy_diff
+
+    result = policy_diff.diff_roots(ns.base, ns.head)
+    if ns.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    elif ns.markdown:
+        print(policy_diff.format_markdown(result), end="")
+    else:
+        print(policy_diff.format_text(result))
+
+    # A diff reports; gating on it is an opt-in a strict repo turns on.
+    if ns.fail_on_crossing and result.newly_allowed:
+        print(
+            f"error: {result.newly_allowed} decision(s) that were refused would now "
+            "go through un-gated",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def _run_audit_reindex(ns: argparse.Namespace) -> int:
     from mcp_gateway.audit.index import AuditIndex
 
@@ -810,6 +857,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _run_policy_backtest(ns)
             if ns.policy_command == "ci":
                 return _run_policy_ci(ns)
+            if ns.policy_command == "diff":
+                return _run_policy_diff(ns)
         if ns.command == "audit" and ns.audit_command == "reindex":
             return _run_audit_reindex(ns)
         if ns.command == "serve":

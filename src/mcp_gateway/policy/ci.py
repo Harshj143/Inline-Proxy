@@ -329,7 +329,11 @@ def _check_backtest(target: Target, report: PackReport, engine: PolicyEngine) ->
     `mcp-gateway policy backtest --audit <real log>`, which is the operator's
     tool, not CI's.
     """
-    from mcp_gateway.policy.backtest import backtest_policy
+    from mcp_gateway.policy.backtest import (
+        backtest_policy,
+        declared_roles,
+        effective_deny_set,
+    )
 
     tools = sorted(target.connector.tools()) if target.connector else []
     if not tools and target.tests is not None:
@@ -343,8 +347,10 @@ def _check_backtest(target: Target, report: PackReport, engine: PolicyEngine) ->
         ))
         return
 
-    roles: list[str | None] = [None, *_declared_roles(engine)]
-    deny = _deny_set()
+    roles: list[str | None] = [None, *declared_roles(engine)]
+    # Score against the handlers a real gateway runs (the goldens wire a
+    # RedactionService), not the bare registry's fail-closed baseline.
+    deny = effective_deny_set()
     expected = len(tools) * len(roles)
 
     with tempfile.TemporaryDirectory(prefix="mcpg-ci-") as tmp:
@@ -406,29 +412,6 @@ def _write_synthetic_spool(
                 else:
                     event["action"] = decision.action
                 fh.write(json.dumps(event) + "\n")
-
-
-def _declared_roles(engine: PolicyEngine) -> list[str]:
-    """Every role any rule overlays — the role views a backtest should cover."""
-    roles: set[str] = set()
-    for rule in engine.describe().get("rules", []):
-        roles.update(rule.get("roles", {}))
-    return sorted(roles)
-
-
-def _deny_set() -> frozenset[str]:
-    """Actions that deny under the handler set the goldens run with.
-
-    The golden harness wires a real `RedactionService`, so `redact` allows the
-    call through (scrubbed) rather than refusing it. The backtest must score
-    outcomes against that same handler set or it would report every `redact`
-    rule as newly blocked.
-    """
-    from mcp_gateway.core.pipeline import build_action_handlers
-    from mcp_gateway.redaction.service import RedactionService
-
-    handlers = build_action_handlers(RedactionService())
-    return frozenset(name for name, h in handlers.items() if h.terminal_deny)
 
 
 def _summarize(items: list[str]) -> str:

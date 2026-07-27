@@ -9,7 +9,7 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–6 COMPLETE (6b GitHub pack merged 2026-07-26) and Phase 8 (Slack pack) merged 2026-07-26. In progress: Phase 10 (Policy CI/CD) — 10a DONE 2026-07-27, 10b next.**
+**➡️ You are here: Phases 0–6 COMPLETE (6b GitHub pack merged 2026-07-26) and Phase 8 (Slack pack) merged 2026-07-26. In progress: Phase 10 (Policy CI/CD) — 10a + 10b DONE 2026-07-27, 10c (signed bundles) next.**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -406,19 +406,66 @@ zero pipeline edits. Split into 10a (the gate), 10b (the blast-radius comment),
       install only**, which doubles as a standing proof that policy tooling pulls
       in no extras
 - [x] `tests/unit/test_goldens.py` rewritten discovery-first: it named packs by
-      hand before, and it showed — the GitHub pack's goldens were only reachable
-      via `test_github_pack.py`. pytest and CI now run the *same* `check_target`,
-      so they cannot drift, and a vacuity guard fails if discovery returns nothing
+      hand before, and it showed — the GitHub pack's 23 goldens ran nowhere until
+      a follow-up PR (`0cab075`) added the call by hand, and the same gap would
+      have opened for the next pack. This supersedes that fix structurally.
+      pytest and CI now run the *same* `check_target`, so they cannot drift; a
+      vacuity guard fails if discovery returns nothing; and a `MIN_GOLDENS`
+      ratchet keeps `0cab075`'s per-pack floor so gutting a suite fails the build
+      (a floor map, not a pack list — an unlisted pack still runs)
 - [x] `tests/unit/test_policy_ci.py` — 26 tests against synthetic broken repos
       (a checker that never fails is indistinguishable from one that does
       nothing): every check catches its failure, discovery intolerance, `--only`
       typo fails rather than checking nothing, annotation escaping, CLI exit codes.
       372 passed / 1 skipped, ruff clean
 
-### Phase 10b — Blast-radius PR comment
+### Phase 10b — Blast-radius PR comment ✅ DONE (2026-07-27)
 
-- [ ] Post the `policy/backtest.py` diff as a PR comment ("newly blocks N tools,
-      newly allows M") against a recorded audit fixture; sticky/updated per push
+**Design note — why this is a policy diff, not a traffic backtest.** The phase
+was scoped as "post the backtest blast radius". A CI runner has no audit log, so
+that would have meant committing a traffic fixture and reporting blast radius
+against synthetic history — precise-looking numbers about traffic that never
+happened. The reviewer's question is different anyway: not "which recorded calls
+flip" but **"what does this PR change?"**. So `policy diff` compiles both
+revisions and enumerates every decision. `policy backtest --audit <real log>`
+remains the operator's tool for weighting a change by actual traffic; the two
+answer different questions and both survive.
+
+- [x] `policy/diff.py` — compiles each pack on **both** sides and evaluates every
+      tool × every role view. This is the part a YAML diff cannot do: layered
+      merge, glob specificity, and role overlays mean a three-line `roles.yaml`
+      edit can move a hundred decisions, and deleting a rule silently hands a tool
+      to `default_action`
+- [x] Changes are ranked on the project's own least-privilege ladder
+      (`allow < rewrite/redact < quarantine < require_approval < block`):
+      `loosened` / `tightened` / `changed`. **A binary allowed-vs-blocked verdict
+      gets the most common real edit wrong** — `block → require_approval` reads as
+      "both refuse" to a bare gateway, but it is exactly how a tool gets opened up.
+      `crosses_deny_boundary` carries the harder, narrower claim (refused before,
+      un-gated now) so the headline can state it without leaning on it for
+      everything
+- [x] A pack that only **appeared** is reported by its action distribution, not as
+      N loosened decisions — it adds enforcement where the repo had none, and
+      calling that a loosening would bury real findings on the pack-authoring PRs
+      this project is full of. A **removed** pack is flagged loudly: deleting
+      `connectors/<pack>/` deletes controls, which a text diff makes look like
+      housekeeping
+- [x] `mcp-gateway policy diff --base DIR --head DIR [--markdown --json
+      --fail-on-crossing]`. Reports by default (like `backtest`); the gate is
+      opt-in
+- [x] `policy-ci.yml` gains a `blast-radius` job: worktrees the base ref, renders
+      the comment, and posts **one sticky comment per PR** edited in place —
+      twelve stale blast-radius comments train reviewers to ignore all of them. It
+      stays quiet when the diff is clean *and* no comment exists, but still
+      updates a previously-alarming comment once the branch goes clean. Always
+      writes the job summary too, so a fork PR (read-only token, cannot comment)
+      still shows the blast radius
+- [x] `tests/unit/test_policy_diff.py` — 29 tests pinning the judgments: the full
+      ladder, deny-boundary crossing as a separate signal, role-overlay-only
+      changes visible, deleted rule → `default_action` fallthrough, glob rules
+      diffed through concrete inventory tools, added/removed pack framing,
+      broken-head reported not crashed, and that every rendering states what is
+      *not* replayed. 400 passed / 7 skipped, ruff clean
 
 ### Phase 10c — Signed policy bundles
 

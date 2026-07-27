@@ -37,3 +37,62 @@ jobs:
         # appends the summary table to the job summary. Non-zero exit fails the
         # PR: a pack that breaks its own goldens must not merge.
         run: mcp-gateway policy ci --root . --github
+
+  blast-radius:
+    # What does this PR actually change? Reading the YAML diff does not answer
+    # it — layered merge, glob specificity, and role overlays mean a three-line
+    # edit to roles.yaml can move a hundred decisions. `policy diff` compiles
+    # both revisions and enumerates them.
+    name: blast radius
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the base revision must be reachable locally
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Materialize the base revision
+        run: git worktree add --detach /tmp/policy-base "origin/${{ github.base_ref }}"
+      - name: Compute blast radius
+        id: diff
+        run: |
+          mcp-gateway policy diff --base /tmp/policy-base --head . --json > diff.json
+          mcp-gateway policy diff --base /tmp/policy-base --head . --markdown > comment.md
+          # The job summary is the fallback that always works — a PR from a fork
+          # gets a read-only token and cannot comment, and the reviewer there
+          # needs the blast radius just as much.
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+          echo "clean=$(jq -r .clean diff.json)" >> "$GITHUB_OUTPUT"
+      - name: Post blast-radius comment
+        continue-on-error: true   # see above: forks cannot comment; summary stands in
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          CLEAN: ${{ steps.diff.outputs.clean }}
+        run: |
+          set -euo pipefail
+          marker='<!-- mcp-gateway:policy-diff -->'
+          # One comment per PR, edited in place. Twelve stale blast-radius
+          # comments train reviewers to ignore all of them.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+                 --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n1)
+          if [ -z "$id" ] && [ "$CLEAN" = "true" ]; then
+            echo "no policy decision changes and no existing comment — staying quiet"
+            exit 0
+          fi
+          # A previously-alarming comment still gets updated once the branch goes
+          # clean, so nobody reviews against a stale warning.
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@comment.md
+          fi

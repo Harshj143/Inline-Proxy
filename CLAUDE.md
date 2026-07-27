@@ -67,6 +67,7 @@ mcp-gateway connectors list | show <name>       # discover / inspect
 mcp-gateway policy test --policy connectors/<name>/policy.yaml \
                         --tests  connectors/<name>/policy_tests.yaml
 mcp-gateway policy ci                           # what CI runs: every pack, discovered
+mcp-gateway policy diff --base <worktree> --head .   # blast radius of a policy change
 mcp-gateway wrap --connector <name> [--override company.yaml] -- <server cmd>   # run it
 ```
 
