@@ -96,3 +96,60 @@ jobs:
           else
             gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@comment.md
           fi
+
+  sign-bundles:
+    # Merge → versioned, signed bundles: the release half of policy CI/CD. Runs
+    # only on main (a bundle is a thing you deploy, not a thing you review), and
+    # only when a signing key is configured — the private key lives in repo
+    # secrets, never in the tree, and a fork or an unconfigured repo skips this
+    # cleanly rather than failing. The gateway verifies these with the PUBLIC
+    # half (commit it to the repo; it is not a secret) — see policy/bundle.py.
+    name: build + sign policy bundles
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: "Install with [vault] (signing needs cryptography)"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[vault]"
+      - name: Build + sign a bundle for every pack
+        env:
+          # A PEM Ed25519 private key. Configure at Settings → Secrets →
+          # Actions as POLICY_SIGNING_KEY (generate with `mcp-gateway policy
+          # keygen`; commit the .pub.pem, keep the .pem here).
+          POLICY_SIGNING_KEY: ${{ secrets.POLICY_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${POLICY_SIGNING_KEY:-}" ]; then
+            echo "::notice::POLICY_SIGNING_KEY not configured — skipping bundle signing. Add the secret to publish signed policy bundles on merge."
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$POLICY_SIGNING_KEY" > signing.pem
+          mkdir -p dist
+          # Discover packs the same way policy ci does — a new pack is bundled
+          # on the next merge with no workflow edit.
+          names=$(mcp-gateway policy ci --root . --json \
+                    | python -c 'import sys,json;[print(p["name"]) for p in json.load(sys.stdin)["packs"] if p["kind"]=="connector"]')
+          for name in $names; do
+            mcp-gateway policy bundle build --connector "$name" \
+              --sign-key signing.pem --out "dist/${name}.mcgb.json"
+          done
+          rm -f signing.pem
+          echo "## Signed bundles" >> "$GITHUB_STEP_SUMMARY"
+          for f in dist/*.mcgb.json; do
+            ver=$(mcp-gateway policy bundle show "$f" --json | python -c 'import sys,json;print(json.load(sys.stdin)["version"])')
+            echo "- \`$(basename "$f")\` — $ver" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Upload signed bundles
+        if: hashFiles('dist/*.mcgb.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: policy-bundles
+          path: dist/*.mcgb.json
