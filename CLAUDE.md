@@ -66,11 +66,18 @@ mcp-gateway connectors scaffold <name>          # new pack skeleton (default-den
 mcp-gateway connectors list | show <name>       # discover / inspect
 mcp-gateway policy test --policy connectors/<name>/policy.yaml \
                         --tests  connectors/<name>/policy_tests.yaml
+mcp-gateway policy ci                           # what CI runs: every pack, discovered
 mcp-gateway wrap --connector <name> [--override company.yaml] -- <server cmd>   # run it
 ```
 
 A deployment customizes a pack with `--override` (a policy layer merged on top —
 field-level, later wins), never by forking it.
+
+`policy ci` (`policy/ci.py`) **discovers** packs rather than taking a list, so a
+new pack is checked with no workflow or test edit. It validates every layer plus
+the merged result, runs the goldens, requires every inventoried tool to have an
+explicit rule, and smoke-tests the backtest replay path. `tests/unit/test_goldens.py`
+runs the same `check_target`, so pytest and CI cannot drift.
 
 ## Conventions
 

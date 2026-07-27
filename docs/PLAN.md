@@ -9,7 +9,7 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–5 COMPLETE; Phase 6a (connector framework) COMPLETE 2026-07-25. In progress, in parallel: Phase 6b (GitHub pack) and Phase 8 (Slack pack).**
+**➡️ You are here: Phases 0–6 COMPLETE (6b GitHub pack merged 2026-07-26) and Phase 8 (Slack pack) merged 2026-07-26. In progress: Phase 10 (Policy CI/CD) — 10a DONE 2026-07-27, 10b next.**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -242,7 +242,7 @@ multi-upstream routing bound to per-pack policy, `mcp-gateway serve --config`,
 Redis-shared session state across replicas, a Postgres audit-index option, and a
 container stack — the gateway now runs as an enterprise service, not only a sidecar.
 
-## Phase 6 — Connector framework + GitHub pack (size: L) ⬅️ NEXT
+## Phase 6 — Connector framework + GitHub pack (size: L) ✅ DONE
 
 Split so the framework lands first and unblocks parallel pack authoring
 (GitHub + Slack can then proceed independently — see Phase 8).
@@ -368,9 +368,62 @@ different policy treatment on the same tool; revoked token fails closed.
 
 ## Phase 10 — Policy CI/CD (size: S–M)
 
-- [ ] `policy test` (golden harness from Phase 1, CLI-first), `validate`, `backtest` — CI-friendly output
-- [ ] GitHub Action: PR → validate + test + backtest, **diff posted as PR comment**
-- [ ] Merge → versioned bundle (content hash + signature); gateway verifies, atomically swaps, keeps last-known-good
+The pluggability payoff: a pack is only safely pluggable if adding one requires
+zero pipeline edits. Split into 10a (the gate), 10b (the blast-radius comment),
+10c (signed bundles).
+
+### Phase 10a — `policy ci`: validate + test every pack, by discovery ✅ DONE (2026-07-27)
+
+- [x] `policy/ci.py` — **discovers** what to check (every `connectors/<pack>/` +
+      every standalone `policies/*.yaml`) instead of being handed a list, so a
+      new pack is covered on the next PR with no workflow edit. Discovery is
+      deliberately *intolerant*, the one place it diverges from
+      `registry.list_connectors()`: a pack that fails to load is a build failure,
+      never a silently-skipped row (fail-closed applied to the policy supply chain)
+- [x] Four checks per pack, weakest→strongest: **validate** (every layer parses
+      *and* the merged result compiles — layers can be individually valid and
+      conflict when merged) · **goldens** (loads BOTH layers in runtime order,
+      so role cases can't pass for the wrong reason; a connector with no
+      `policy_tests.yaml` FAILS — an unverified policy is an unverified control) ·
+      **coverage** (every tool in `tools.yaml` resolves to an explicit rule, not
+      `default_action`: default-deny is safe but unrated means unreviewed — this
+      generalizes the GitHub pack's own invariant to all packs) · **backtest**
+      (self-consistency smoke, below)
+- [x] Backtest smoke: synthesizes an audit spool holding one recorded call per
+      (tool, role) across the pack's whole inventory, replays it through the same
+      policy, and requires a **zero diff** — any changed row means the Phase 4a
+      replay path disagrees with the live matcher (a dropped role in the bucket
+      key, a shifted outcome mapping). Scores outcomes against the *golden*
+      handler set so a service-backed `redact` isn't misread as a denial. ~436
+      replayed calls for GitHub on every PR. Explicitly NOT evidence about
+      production traffic — that stays `policy backtest --audit <real log>`
+- [x] `mcp-gateway policy ci [--root --only --min-goldens --no-backtest --json
+      --github]`; `--github` emits `::error` annotations anchored to the policy
+      file a reviewer edits (with workflow-command escaping) and appends a summary
+      table to `$GITHUB_STEP_SUMMARY`. Exits non-zero — a gate, unlike `backtest`,
+      which only reports
+- [x] `.github/workflows/policy-ci.yml` — its own red/green on the PR, **core
+      install only**, which doubles as a standing proof that policy tooling pulls
+      in no extras
+- [x] `tests/unit/test_goldens.py` rewritten discovery-first: it named packs by
+      hand before, and it showed — the GitHub pack's goldens were only reachable
+      via `test_github_pack.py`. pytest and CI now run the *same* `check_target`,
+      so they cannot drift, and a vacuity guard fails if discovery returns nothing
+- [x] `tests/unit/test_policy_ci.py` — 26 tests against synthetic broken repos
+      (a checker that never fails is indistinguishable from one that does
+      nothing): every check catches its failure, discovery intolerance, `--only`
+      typo fails rather than checking nothing, annotation escaping, CLI exit codes.
+      372 passed / 1 skipped, ruff clean
+
+### Phase 10b — Blast-radius PR comment
+
+- [ ] Post the `policy/backtest.py` diff as a PR comment ("newly blocks N tools,
+      newly allows M") against a recorded audit fixture; sticky/updated per push
+
+### Phase 10c — Signed policy bundles
+
+- [ ] Merge → versioned bundle (content hash + signature); gateway verifies,
+      atomically swaps, keeps last-known-good
 
 **Exit criteria:** a policy PR in a demo repo shows the blast-radius comment;
 a tampered bundle is rejected with an audit event.

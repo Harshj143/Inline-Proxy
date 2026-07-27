@@ -2,7 +2,8 @@
 
 Phase 1 ships `wrap`, `version`, and the `policy` subcommands (validate,
 show, test). Phase 4a adds `policy backtest` and `audit reindex` (the console's
-read model). `serve`, `init`, and `add` arrive in their phases (docs/PLAN.md).
+read model); Phase 10 adds `policy ci`. `init` and `add` arrive in their phases
+(docs/PLAN.md).
 
 Usage:
     mcp-gateway wrap --policy base.yaml --policy override.yaml -- \
@@ -11,6 +12,7 @@ Usage:
     mcp-gateway policy show --policy base.yaml --policy override.yaml
     mcp-gateway policy test --policy pack.yaml --tests pack.tests.yaml
     mcp-gateway policy backtest --policy new.yaml --audit audit.log
+    mcp-gateway policy ci --root . --github
     mcp-gateway audit reindex --audit audit.log --index audit.db
 """
 
@@ -19,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -176,6 +179,31 @@ def _build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--audit", required=True, metavar="FILE",
                           help="audit spool (JSONL) whose recorded calls are replayed")
     backtest.add_argument("--json", action="store_true", help="machine-readable output")
+
+    ci = policy_sub.add_parser(
+        "ci",
+        help="validate + golden-test every policy pack in a repo (the CI entry point)",
+        description=(
+            "Discover every connector pack and standalone policy file under a "
+            "repo and check each one: layers parse and merge, golden decisions "
+            "hold, every inventoried tool has an explicit rule, and the backtest "
+            "replay path agrees with the live matcher. Discovery means a new pack "
+            "is covered without editing the pipeline. Exits non-zero on any "
+            "failure."
+        ),
+    )
+    ci.add_argument("--root", default=".", metavar="DIR",
+                    help="repo root holding connectors/ and policies/ (default: .)")
+    ci.add_argument("--only", action="append", metavar="NAME",
+                    help="check only this pack/policy by name; repeatable")
+    ci.add_argument("--min-goldens", type=int, default=1, metavar="N",
+                    help="minimum golden cases a pack must ship (default: 1)")
+    ci.add_argument("--no-backtest", action="store_true",
+                    help="skip the backtest self-consistency check")
+    ci.add_argument("--json", action="store_true", help="machine-readable output")
+    ci.add_argument("--github", action="store_true",
+                    help="emit GitHub Actions error annotations and append a job "
+                         "summary to $GITHUB_STEP_SUMMARY")
 
     audit = sub.add_parser("audit", help="build and inspect the audit index")
     audit_sub = audit.add_subparsers(dest="audit_command", required=True)
@@ -479,6 +507,43 @@ def _run_policy_backtest(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _run_policy_ci(ns: argparse.Namespace) -> int:
+    from mcp_gateway.policy.ci import (
+        format_markdown,
+        format_text,
+        github_annotations,
+        run_policy_ci,
+    )
+
+    report = run_policy_ci(
+        ns.root,
+        min_goldens=ns.min_goldens,
+        backtest=not ns.no_backtest,
+        only=ns.only,
+    )
+    if ns.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(format_text(report))
+
+    if ns.github:
+        # Annotations go to stdout (that is how workflow commands are read);
+        # the summary is appended to the file Actions hands us, when present.
+        for annotation in github_annotations(report):
+            print(annotation)
+        summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            try:
+                with open(summary_path, "a", encoding="utf-8") as fh:
+                    fh.write(format_markdown(report))
+            except OSError as exc:  # a summary is reporting, never the gate
+                print(f"warning: could not write job summary: {exc}", file=sys.stderr)
+
+    # Unlike `backtest`, this IS a gate: a pack that fails its own goldens must
+    # not merge.
+    return 0 if report.ok else 1
+
+
 def _run_audit_reindex(ns: argparse.Namespace) -> int:
     from mcp_gateway.audit.index import AuditIndex
 
@@ -743,6 +808,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _run_policy_test(ns)
             if ns.policy_command == "backtest":
                 return _run_policy_backtest(ns)
+            if ns.policy_command == "ci":
+                return _run_policy_ci(ns)
         if ns.command == "audit" and ns.audit_command == "reindex":
             return _run_audit_reindex(ns)
         if ns.command == "serve":
