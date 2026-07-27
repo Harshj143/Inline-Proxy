@@ -55,6 +55,12 @@ TRANSPORT_OVERRUN = "transport_line_overrun"
 # Vault
 DETOKENIZE = "detokenize"
 
+# Signed policy bundles (Phase 10c). Loud on rejection: a refused bundle means
+# the gateway is enforcing something OTHER than what was just pushed.
+POLICY_BUNDLE_LOADED = "policy_bundle_loaded"      # verified bundle is now enforcing
+POLICY_BUNDLE_REJECTED = "policy_bundle_rejected"  # bad hash/signature — refused, fail closed
+POLICY_BUNDLE_FALLBACK = "policy_bundle_fallback"  # current unusable; last-known-good served
+
 
 def make_event(event: str, **fields: Any) -> dict[str, Any]:
     return {

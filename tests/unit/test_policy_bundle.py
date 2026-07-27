@@ -381,3 +381,43 @@ def test_cli_show_reports_the_manifest(tmp_path, layers, capsys):
     info = json.loads(capsys.readouterr().out)
     assert info["name"] == "demo" and info["signed"] is True
     assert info["integrity_ok"] is True
+
+
+def build_versioned(tmp_path, layers, priv, out, version):
+    args = ["policy", "bundle", "build", "--out", str(out),
+            "--sign-key", str(priv), "--version", version]
+    for layer in layers:
+        args += ["--policy", str(layer)]
+    assert main(args) == 0
+    return out
+
+
+def test_cli_store_install_current_rollback(tmp_path, layers, capsys):
+    priv, pub = keypair(tmp_path)
+    store = tmp_path / "store"
+    v1 = build_versioned(tmp_path, layers, priv, tmp_path / "v1.json", "v1")
+    v2 = build_versioned(tmp_path, layers, priv, tmp_path / "v2.json", "v2")
+
+    common = ["--store", str(store), "--public-key", str(pub)]
+    assert main(["policy", "bundle", "install", str(v1), *common]) == 0
+    assert main(["policy", "bundle", "install", str(v2), *common]) == 0
+    capsys.readouterr()
+    assert main(["policy", "bundle", "current", "demo", *common]) == 0
+    assert "v2" in capsys.readouterr().out
+    # Roll back to the displaced v1.
+    assert main(["policy", "bundle", "rollback", "demo", *common]) == 0
+    capsys.readouterr()
+    main(["policy", "bundle", "current", "demo", *common])
+    assert "v1" in capsys.readouterr().out
+
+
+def test_cli_store_install_rejects_a_forged_bundle(tmp_path, layers, capsys):
+    priv, pub = keypair(tmp_path)
+    # A bundle signed by a DIFFERENT key than the store trusts.
+    assert main(["policy", "keygen", "--out", str(tmp_path / "attacker")]) == 0
+    forged = build_signed(tmp_path, layers, tmp_path / "attacker.pem", tmp_path / "f.json")
+    capsys.readouterr()
+    code = main(["policy", "bundle", "install", str(forged),
+                 "--store", str(tmp_path / "store"), "--public-key", str(pub)])
+    assert code == 1
+    assert "REJECTED" in capsys.readouterr().out

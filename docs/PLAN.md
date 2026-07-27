@@ -9,7 +9,8 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–6 COMPLETE (6b GitHub pack merged 2026-07-26) and Phase 8 (Slack pack) merged 2026-07-26. In progress: Phase 10 (Policy CI/CD) — 10a + 10b DONE 2026-07-27, 10c (signed bundles) next.**
+**➡️ You are here: Phases 0–6 COMPLETE (6b GitHub pack merged 2026-07-26) and Phase 8 (Slack pack) merged 2026-07-26. Phase 10 (Policy CI/CD) COMPLETE 2026-07-27 (10a discover-and-check, 10b blast-radius comment,
+10c signed bundles). Remaining: 9 (OIDC), 11 (SIEM sinks), 12 (DX & release polish).**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -467,13 +468,58 @@ answer different questions and both survive.
       broken-head reported not crashed, and that every rendering states what is
       *not* replayed. 400 passed / 7 skipped, ruff clean
 
-### Phase 10c — Signed policy bundles
+### Phase 10c — Signed policy bundles ✅ DONE (2026-07-27)
 
-- [ ] Merge → versioned bundle (content hash + signature); gateway verifies,
-      atomically swaps, keeps last-known-good
+- [x] `policy/bundle.py` — a bundle is one self-describing, `cat`-inspectable JSON
+      file: manifest (name, version, created, `content_hash`, signer id) + payload
+      (raw layer text) + Ed25519 signature. **Two-link integrity chain, both
+      checked on load:** `content_hash = sha256(canonical(payload))` binds the
+      policy; the signature is over the canonical manifest, which *contains* the
+      hash. Flip a policy byte → hash mismatches; recompute the hash to cover the
+      edit → signature over the manifest fails. You cannot fix both without the
+      private key (a test pins exactly that attack). Payload stores raw text so the
+      gateway re-parses through the normal loader — a bundle can't smuggle a shape
+      the file path would reject; `build` also parses up front so an invalid policy
+      is never sealed into a signed artifact
+- [x] `policy/signing.py` — **Ed25519, not a shared-secret MAC, on purpose:** it
+      splits capabilities. The private key lives only where bundles are produced
+      and signs; the gateway holds only the public key and can do nothing but
+      verify, so compromising the gateway does not yield the ability to mint
+      policy. Crypto lives behind `[vault]`; signing/verifying **fail closed** when
+      it is absent (a gateway that can't check a signature refuses the bundle).
+      `key_id` = short hash of the public key (a label, not a control)
+- [x] `policy/bundle_store.py` — the reload primitive. `install` **verifies before
+      it swaps** (a forged/corrupt bundle is refused, the current policy keeps
+      enforcing — fail-closed reload); the swap is `os.replace`-**atomic** (no torn
+      read); each install demotes the prior bundle to **last-known-good**;
+      `current()` **re-verifies on every read** and self-heals to LKG when the live
+      bundle is corrupt on disk; `rollback()` promotes LKG and is itself reversible.
+      A store with no verifying key refuses to resolve (an unverified store is just
+      rewritable files)
+- [x] CLI: `policy keygen` (private key written 0600), `policy bundle
+      build|verify|show`, and store ops `bundle install|rollback|current`. `wrap
+      --bundle FILE --public-key KEY` and `wrap --bundle-store DIR --bundle-name
+      NAME --public-key KEY` verify before enforcing and **audit** the outcome
+      (`policy_bundle_loaded` / `policy_bundle_rejected` / `policy_bundle_fallback`);
+      a bundle without `--public-key`, or one that fails to verify, fails closed at
+      startup
+- [x] `policy-ci.yml` gains a `sign-bundles` job on merge to main: discovers packs
+      (same discovery as `policy ci`), builds + signs a bundle per pack from the
+      `POLICY_SIGNING_KEY` secret, uploads them as artifacts. Skips cleanly when
+      the secret is unset (a fork, or an unconfigured repo) — signing is a release
+      convenience, not a gate. Runs on `[vault]`; the gateway verifies with the
+      committed **public** half
+- [x] Tests: `test_policy_bundle.py` (37 — round-trip, every tamper variant incl.
+      recomputed-hash-still-fails-signature, wrong/stale key, unsigned-when-required,
+      malformed envelopes, PEM I/O, crypto-absent fail-closed, all CLI paths),
+      `test_policy_bundle_store.py` (13 — reject-keeps-current, self-heal to LKG,
+      swap-on-disk caught on read, reversible rollback, multi-pack), and e2e
+      `test_wrap_bundle.py` (5 — real `wrap --bundle` polices traffic; a **tampered
+      bundle is refused with a `policy_bundle_rejected` audit event** and the
+      gateway refuses to start; store path). 458 passed / 7 skipped, ruff clean
 
-**Exit criteria:** a policy PR in a demo repo shows the blast-radius comment;
-a tampered bundle is rejected with an audit event.
+**Exit criteria: MET.** Blast-radius comment posts (10b); a tampered bundle is
+rejected with an audit event and the gateway fails closed (10c, e2e-proven).
 
 ## Phase 11 — Audit sinks: SIEM (size: M)
 

@@ -68,6 +68,9 @@ mcp-gateway policy test --policy connectors/<name>/policy.yaml \
                         --tests  connectors/<name>/policy_tests.yaml
 mcp-gateway policy ci                           # what CI runs: every pack, discovered
 mcp-gateway policy diff --base <worktree> --head .   # blast radius of a policy change
+mcp-gateway policy keygen --out signing         # Ed25519 keypair for signing bundles
+mcp-gateway policy bundle build --connector <name> --sign-key signing.pem --out <name>.mcgb.json
+mcp-gateway wrap --bundle <name>.mcgb.json --public-key signing.pub.pem -- <server cmd>
 mcp-gateway wrap --connector <name> [--override company.yaml] -- <server cmd>   # run it
 ```
 
@@ -79,6 +82,17 @@ new pack is checked with no workflow or test edit. It validates every layer plus
 the merged result, runs the goldens, requires every inventoried tool to have an
 explicit rule, and smoke-tests the backtest replay path. `tests/unit/test_goldens.py`
 runs the same `check_target`, so pytest and CI cannot drift.
+
+**Signed bundles** (`policy/bundle.py`, `bundle_store.py`, `signing.py`) are the
+deploy unit: a versioned JSON envelope with a sha256 `content_hash` over the
+payload and an Ed25519 signature over the manifest (which carries the hash — two
+links, both checked on load). Ed25519 is deliberate: CI holds the private key and
+signs, the gateway holds only the public key and can only verify, so a compromised
+gateway can't mint policy. Signing/verifying need `[vault]` (cryptography) and
+**fail closed** without it. The `BundleStore` verifies before an atomic swap and
+keeps a last-known-good; `wrap --bundle`/`--bundle-store` verify before enforcing
+and audit the outcome. Bundles are the ONLY place the gateway trusts a signature —
+don't add a second signing scheme; extend this one.
 
 ## Conventions
 

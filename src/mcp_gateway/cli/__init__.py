@@ -86,6 +86,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="extra policy file layered on top of --connector/--policy "
         "(customize a pack without forking it); repeat to layer",
     )
+    wrap.add_argument(
+        "--bundle",
+        default=None,
+        metavar="FILE",
+        help="load policy from a signed bundle file, verified before enforcing "
+        "(needs --public-key); mutually exclusive with --connector/--policy",
+    )
+    wrap.add_argument(
+        "--bundle-store",
+        default=None,
+        metavar="DIR",
+        help="load the current bundle for --bundle-name from a bundle store, "
+        "re-verified on read with fallback to last-known-good (needs --public-key)",
+    )
+    wrap.add_argument(
+        "--bundle-name",
+        default=None,
+        metavar="NAME",
+        help="which pack's current bundle to load from --bundle-store",
+    )
+    wrap.add_argument(
+        "--public-key",
+        default=None,
+        metavar="FILE",
+        help="Ed25519 public key PEM the gateway verifies a --bundle/--bundle-store "
+        "against; without it a signed bundle is refused (fail closed)",
+    )
     wrap.add_argument("--audit", default="audit.log", help="audit spool path (JSONL)")
     wrap.add_argument(
         "--principal",
@@ -274,6 +301,32 @@ def _build_parser() -> argparse.ArgumentParser:
     b_show.add_argument("bundle", metavar="FILE")
     b_show.add_argument("--json", action="store_true", help="machine-readable output")
 
+    b_install = bundle_sub.add_parser(
+        "install",
+        help="verify a bundle and make it the current one in a store (atomic; "
+             "keeps the prior as last-known-good)",
+    )
+    b_install.add_argument("bundle", metavar="FILE")
+    b_install.add_argument("--store", required=True, metavar="DIR",
+                           help="bundle store directory")
+    b_install.add_argument("--public-key", required=True, metavar="FILE",
+                           help="Ed25519 public key PEM to verify against")
+
+    b_rollback = bundle_sub.add_parser(
+        "rollback",
+        help="promote a store's last-known-good bundle back to current",
+    )
+    b_rollback.add_argument("name", metavar="NAME", help="pack name to roll back")
+    b_rollback.add_argument("--store", required=True, metavar="DIR")
+    b_rollback.add_argument("--public-key", required=True, metavar="FILE")
+
+    b_current = bundle_sub.add_parser(
+        "current", help="show the current bundle version in a store"
+    )
+    b_current.add_argument("name", metavar="NAME")
+    b_current.add_argument("--store", required=True, metavar="DIR")
+    b_current.add_argument("--public-key", required=True, metavar="FILE")
+
     keygen = policy_sub.add_parser(
         "keygen",
         help="generate an Ed25519 keypair for signing policy bundles",
@@ -461,6 +514,82 @@ def _build_wrap_engine(ns: argparse.Namespace) -> PolicyEngine:
     return PolicyEngine.load(layers)
 
 
+def _load_bundle_engine(
+    ns: argparse.Namespace, recorder: AuditRecorder
+) -> tuple[PolicyEngine, dict]:
+    """Load, verify, and compile a policy bundle for `wrap`.
+
+    Fail-closed and *audited*: a bundle that does not verify is refused with a
+    `policy_bundle_rejected` event before the process exits, so the audit trail
+    records that the gateway declined to enforce what was pushed — the exit
+    criterion for tamper detection. Returns the engine plus a dict of annotations
+    (version, signer, source) for `gateway_start`.
+    """
+    from mcp_gateway.policy.bundle import (
+        engine_from_bundle,
+        load_bundle,
+        verify_bundle,
+    )
+    from mcp_gateway.policy.signing import load_verifying_key
+
+    if ns.override or ns.policy or ns.connector:
+        raise GatewayError(
+            "wrap: --bundle/--bundle-store cannot be combined with "
+            "--connector/--policy/--override (a bundle IS the policy)"
+        )
+    if not ns.public_key:
+        # No key = no way to verify = fail closed. Do not silently trust.
+        raise GatewayError(
+            "wrap --bundle/--bundle-store requires --public-key to verify the "
+            "signature; without it a signed bundle cannot be trusted"
+        )
+    verifying_key = load_verifying_key(ns.public_key)
+
+    def _reject(name: str, version: str, reason: str) -> None:
+        asyncio.run(recorder.emit(
+            events.POLICY_BUNDLE_REJECTED, bundle=name, version=version, reason=reason
+        ))
+        asyncio.run(recorder.close())
+        raise GatewayError(f"policy bundle rejected: {reason}")
+
+    annotations: dict = {}
+    if ns.bundle_store:
+        if not ns.bundle_name:
+            raise GatewayError("wrap --bundle-store requires --bundle-name NAME")
+        from mcp_gateway.policy.bundle_store import BundleStore
+
+        store = BundleStore(ns.bundle_store, verifying_key)
+        resolved = store.current(ns.bundle_name)
+        if resolved is None:
+            _reject(ns.bundle_name, "", "no usable current or last-known-good bundle")
+        bundle = resolved.bundle
+        if resolved.fell_back:
+            asyncio.run(recorder.emit(
+                events.POLICY_BUNDLE_FALLBACK, bundle=bundle.name,
+                version=bundle.version,
+                reason="current bundle unusable; served last-known-good",
+            ))
+        annotations["bundle_source"] = resolved.source
+    else:
+        bundle = load_bundle(ns.bundle)
+        result = verify_bundle(bundle, verifying_key)
+        if not result.ok:
+            reason = result.reasons[0] if result.reasons else result.summary
+            _reject(bundle.name, bundle.version, reason)
+        annotations["bundle_source"] = "file"
+
+    engine = engine_from_bundle(bundle)
+    asyncio.run(recorder.emit(
+        events.POLICY_BUNDLE_LOADED, bundle=bundle.name, version=bundle.version,
+        signer_key_id=bundle.signer_key_id, content_hash=bundle.content_hash,
+    ))
+    annotations.update(
+        bundle_name=bundle.name, bundle_version=bundle.version,
+        bundle_signer=bundle.signer_key_id,
+    )
+    return engine, annotations
+
+
 # --------------------------------------------------------------------- wrap
 def _run_wrap(ns: argparse.Namespace) -> int:
     upstream_cmd = ns.upstream_cmd
@@ -471,8 +600,14 @@ def _run_wrap(ns: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
 
-    engine = _build_wrap_engine(ns)
     recorder = AuditRecorder([JsonlSpool(ns.audit)])
+    # Bundle mode verifies before enforcing and audits a rejection before exit,
+    # so the recorder must exist first. Non-bundle mode is unchanged.
+    bundle_annotations: dict = {}
+    if ns.bundle or ns.bundle_store:
+        engine, bundle_annotations = _load_bundle_engine(ns, recorder)
+    else:
+        engine = _build_wrap_engine(ns)
     roles = (ns.role,) if ns.role else ()
 
     # The redaction service makes the redact action executable; passing it to
@@ -508,6 +643,7 @@ def _run_wrap(ns: argparse.Namespace) -> int:
         approval_mode=broker.mode,
         anomaly_backend=monitor.backend_name if monitor else "off",
         gateway_version=__version__,
+        **bundle_annotations,
     )
     transport = StdioTransport(upstream_cmd, gateway)
     return asyncio.run(transport.run())
@@ -759,6 +895,43 @@ def _run_policy_bundle_show(ns: argparse.Namespace) -> int:
     print("layers:")
     for layer in bundle.layers:
         print(f"  - {layer.name}  ({len(layer.text)} bytes)")
+    return 0
+
+
+def _open_bundle_store(ns: argparse.Namespace):
+    from mcp_gateway.policy.bundle_store import BundleStore
+    from mcp_gateway.policy.signing import load_verifying_key
+
+    return BundleStore(ns.store, load_verifying_key(ns.public_key))
+
+
+def _run_policy_bundle_install(ns: argparse.Namespace) -> int:
+    from mcp_gateway.policy.bundle import load_bundle
+
+    store = _open_bundle_store(ns)
+    result = store.install(load_bundle(ns.bundle))
+    print(f"{'installed' if result.accepted else 'REJECTED'}  "
+          f"{result.name} {result.version}: {result.reason}")
+    if result.accepted and result.displaced_version:
+        print(f"  last-known-good is now {result.displaced_version}")
+    return 0 if result.accepted else 1
+
+
+def _run_policy_bundle_rollback(ns: argparse.Namespace) -> int:
+    store = _open_bundle_store(ns)
+    result = store.rollback(ns.name)
+    print(f"{'rolled back' if result.accepted else 'FAILED'}: {result.reason}")
+    return 0 if result.accepted else 1
+
+
+def _run_policy_bundle_current(ns: argparse.Namespace) -> int:
+    store = _open_bundle_store(ns)
+    resolved = store.current(ns.name)
+    if resolved is None:
+        print(f"{ns.name}: no usable bundle in {ns.store}", file=sys.stderr)
+        return 1
+    tag = " (last-known-good fallback)" if resolved.fell_back else ""
+    print(f"{resolved.bundle.name} {resolved.bundle.version}{tag}")
     return 0
 
 
@@ -1039,6 +1212,12 @@ def main(argv: list[str] | None = None) -> int:
                     return _run_policy_bundle_verify(ns)
                 if ns.bundle_command == "show":
                     return _run_policy_bundle_show(ns)
+                if ns.bundle_command == "install":
+                    return _run_policy_bundle_install(ns)
+                if ns.bundle_command == "rollback":
+                    return _run_policy_bundle_rollback(ns)
+                if ns.bundle_command == "current":
+                    return _run_policy_bundle_current(ns)
         if ns.command == "audit" and ns.audit_command == "reindex":
             return _run_audit_reindex(ns)
         if ns.command == "serve":
