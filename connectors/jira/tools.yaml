@@ -1,0 +1,283 @@
+# Complete tool inventory for the Jira MCP server.
+#
+# Source of truth: sooperset/mcp-atlassian, extracted from the
+# @jira_mcp.tool decorators in src/mcp_atlassian/servers/jira.py — ALL 63
+# jira_* tools, nothing omitted. read/write reflects each tool's own upstream
+# tag; `risk` is this pack's security classification and is what policy.yaml
+# acts on:
+#   read            — retrieves data (still redacted: Jira text is untrusted)
+#   write           — changes state (approval-gated)
+#   destructive     — irreversible data loss (blocked)
+#   secret_adjacent — opaque file/image bytes with no useful partial view (quarantined)
+#
+# Regenerate with tools/extract_inventory.py after an upstream bump, then
+# re-classify anything new. Enforcement lives in policy.yaml.
+tools:
+  # ---- jira_agile ----
+  jira_add_issues_to_sprint:
+    risk: write
+    toolset: jira_agile
+    description: "Add issues to a Jira sprint."
+  jira_create_sprint:
+    risk: write
+    toolset: jira_agile
+    description: "Create Jira sprint for a board."
+  jira_get_agile_boards:
+    risk: read
+    toolset: jira_agile
+    description: "Get jira agile boards by name, project key, or type."
+  jira_get_board_issues:
+    risk: read
+    toolset: jira_agile
+    description: "Get all issues linked to a specific board filtered by JQL."
+  jira_get_sprint_issues:
+    risk: read
+    toolset: jira_agile
+    description: "Get jira issues from sprint."
+  jira_get_sprints_from_board:
+    risk: read
+    toolset: jira_agile
+    description: "Get jira sprints from board by state."
+  jira_move_issues_to_backlog:
+    risk: write
+    toolset: jira_agile
+    description: "Move issues to the backlog, removing them from any sprint."
+  jira_update_sprint:
+    risk: write
+    toolset: jira_agile
+    description: "Update jira sprint."
+  # ---- jira_attachments ----
+  jira_download_attachments:
+    risk: secret_adjacent
+    toolset: jira_attachments
+    description: "Download attachments from a Jira issue."
+  jira_get_issue_images:
+    risk: secret_adjacent
+    toolset: jira_attachments
+    description: "Get all images attached to a Jira issue as inline image content."
+  # ---- jira_comments ----
+  jira_add_comment:
+    risk: write
+    toolset: jira_comments
+    description: "Add a comment to a Jira issue."
+  jira_edit_comment:
+    risk: write
+    toolset: jira_comments
+    description: "Edit an existing comment on a Jira issue."
+  # ---- jira_development ----
+  jira_get_issue_development_info:
+    risk: read
+    toolset: jira_development
+    description: "read tool"
+  jira_get_issues_development_info:
+    risk: read
+    toolset: jira_development
+    description: "read tool"
+  # ---- jira_fields ----
+  jira_get_field_options:
+    risk: read
+    toolset: jira_fields
+    description: "Get allowed option values for a custom field."
+  jira_search_fields:
+    risk: read
+    toolset: jira_fields
+    description: "Search Jira fields by keyword with fuzzy match."
+  # ---- jira_forms ----
+  jira_get_issue_proforma_forms:
+    risk: read
+    toolset: jira_forms
+    description: "read tool"
+  jira_get_proforma_form_details:
+    risk: read
+    toolset: jira_forms
+    description: "read tool"
+  jira_update_proforma_form_answers:
+    risk: write
+    toolset: jira_forms
+    description: "write tool"
+  # ---- jira_issues ----
+  jira_assign_issue:
+    risk: write
+    toolset: jira_issues
+    description: "Assign a Jira issue to a user using the dedicated assignment endpoint."
+  jira_batch_create_issues:
+    risk: write
+    toolset: jira_issues
+    description: "Create multiple Jira issues in a batch."
+  jira_batch_get_changelogs:
+    risk: read
+    toolset: jira_issues
+    description: "Get changelogs for multiple Jira issues (Cloud only)."
+  jira_create_issue:
+    risk: write
+    toolset: jira_issues
+    description: "Create a new Jira issue with optional Epic link or parent for subtasks."
+  jira_delete_issue:
+    risk: destructive
+    toolset: jira_issues
+    description: "Delete an existing Jira issue."
+  jira_get_issue:
+    risk: read
+    toolset: jira_issues
+    description: "Get details of a specific Jira issue."
+  jira_get_project_issues:
+    risk: read
+    toolset: jira_issues
+    description: "Get all issues for a specific Jira project."
+  jira_move_issue:
+    risk: write
+    toolset: jira_issues
+    description: "Move a Jira issue to a different project (Jira Cloud only)."
+  jira_search:
+    risk: read
+    toolset: jira_issues
+    description: "Search Jira issues using JQL (Jira Query Language)."
+  jira_update_issue:
+    risk: write
+    toolset: jira_issues
+    description: "Update an issue and optionally transition, comment, and log work."
+  # ---- jira_links ----
+  jira_create_issue_link:
+    risk: write
+    toolset: jira_links
+    description: "Create a link between two Jira issues."
+  jira_create_remote_issue_link:
+    risk: write
+    toolset: jira_links
+    description: "Create a remote issue link (web link or Confluence link) for a Jira issue."
+  jira_get_link_types:
+    risk: read
+    toolset: jira_links
+    description: "Get all available issue link types."
+  jira_link_to_epic:
+    risk: write
+    toolset: jira_links
+    description: "Link an existing issue to an epic."
+  jira_remove_issue_link:
+    risk: write
+    toolset: jira_links
+    description: "Remove a link between two Jira issues."
+  # ---- jira_metrics ----
+  jira_get_issue_dates:
+    risk: read
+    toolset: jira_metrics
+    description: "read tool"
+  jira_get_issue_sla:
+    risk: read
+    toolset: jira_metrics
+    description: "read tool"
+  # ---- jira_project_analysis ----
+  jira_get_cross_project_dependencies:
+    risk: read
+    toolset: jira_project_analysis
+    description: "Find all cross-project issue links for a project."
+  jira_get_project_epic_hierarchy:
+    risk: read
+    toolset: jira_project_analysis
+    description: "Group a project's epics under their cross-project parent issues."
+  # ---- jira_projects ----
+  jira_batch_create_versions:
+    risk: write
+    toolset: jira_projects
+    description: "Batch create multiple versions in a Jira project."
+  jira_create_version:
+    risk: write
+    toolset: jira_projects
+    description: "Create a new fix version in a Jira project."
+  jira_get_all_projects:
+    risk: read
+    toolset: jira_projects
+    description: "Get all Jira projects accessible to the current user."
+  jira_get_create_fields:
+    risk: read
+    toolset: jira_projects
+    description: "Get fields available for creating an issue of a specific type."
+  jira_get_project_components:
+    risk: read
+    toolset: jira_projects
+    description: "Get all components for a specific Jira project."
+  jira_get_project_fields:
+    risk: read
+    toolset: jira_projects
+    description: "Get the fields available on issues of a project (the create schema),"
+  jira_get_project_issue_types:
+    risk: read
+    toolset: jira_projects
+    description: "Get available issue types for a Jira project."
+  jira_get_project_versions:
+    risk: read
+    toolset: jira_projects
+    description: "Get all fix versions for a specific Jira project."
+  jira_search_projects:
+    risk: read
+    toolset: jira_projects
+    description: "Search for Jira projects by name or key prefix."
+  jira_update_version:
+    risk: write
+    toolset: jira_projects
+    description: "Update an existing fix version in a Jira project."
+  # ---- jira_service_desk ----
+  jira_create_customer_request:
+    risk: write
+    toolset: jira_service_desk
+    description: "Create a Jira Service Management customer request."
+  jira_get_queue_issues:
+    risk: read
+    toolset: jira_service_desk
+    description: "read tool"
+  jira_get_request_type_fields:
+    risk: read
+    toolset: jira_service_desk
+    description: "Get field definitions for a Jira Service Management request type."
+  jira_get_request_types:
+    risk: read
+    toolset: jira_service_desk
+    description: "Get request types for a Jira Service Management service desk."
+  jira_get_service_desk_for_project:
+    risk: read
+    toolset: jira_service_desk
+    description: "read tool"
+  jira_get_service_desk_queues:
+    risk: read
+    toolset: jira_service_desk
+    description: "read tool"
+  # ---- jira_transitions ----
+  jira_get_transitions:
+    risk: read
+    toolset: jira_transitions
+    description: "Get available status transitions for a Jira issue."
+  jira_transition_issue:
+    risk: write
+    toolset: jira_transitions
+    description: "Transition a Jira issue to a new status."
+  # ---- jira_users ----
+  jira_get_user_profile:
+    risk: read
+    toolset: jira_users
+    description: "read tool"
+  jira_search_assignable_users:
+    risk: read
+    toolset: jira_users
+    description: "Search Jira users assignable in a given project or issue."
+  # ---- jira_watchers ----
+  jira_add_watcher:
+    risk: write
+    toolset: jira_watchers
+    description: "Add a user as a watcher to a Jira issue."
+  jira_get_issue_watchers:
+    risk: read
+    toolset: jira_watchers
+    description: "Get the list of watchers for a Jira issue."
+  jira_remove_watcher:
+    risk: write
+    toolset: jira_watchers
+    description: "Remove a user from watching a Jira issue."
+  # ---- jira_worklog ----
+  jira_add_worklog:
+    risk: write
+    toolset: jira_worklog
+    description: "Add a worklog entry to a Jira issue."
+  jira_get_worklog:
+    risk: read
+    toolset: jira_worklog
+    description: "Get worklog entries for a Jira issue."

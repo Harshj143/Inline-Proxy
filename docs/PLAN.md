@@ -9,8 +9,11 @@ Work top-down; check items off; each phase ends with **exit criteria** that
 must pass before moving on. Sizes: S ≈ one session, M ≈ 2–3 sessions,
 L ≈ 4+ sessions.
 
-**➡️ You are here: Phases 0–6 COMPLETE (6b GitHub pack merged 2026-07-26) and Phase 8 (Slack pack) merged 2026-07-26. Phase 10 (Policy CI/CD) COMPLETE 2026-07-27 (10a discover-and-check, 10b blast-radius comment,
-10c signed bundles). Remaining: 9 (OIDC), 11 (SIEM sinks), 12 (DX & release polish).**
+**➡️ You are here: Phases 0–6 COMPLETE. Connector packs: GitHub (6b), Slack (8,
+retargeted to korotovsky/slack-mcp-server), Jira (7) — all full-surface,
+source-verified, default-deny. Phase 10 (Policy CI/CD) COMPLETE 2026-07-27 (10a
+discover-and-check, 10b blast-radius comment, 10c signed bundles). Remaining:
+9 (OIDC), 11 (SIEM sinks), 12 (DX & release polish).**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -327,34 +330,68 @@ enforcement.
 **Exit criteria:** real `github-mcp-server` policed end-to-end; the pack is the
 documented template for all future connectors.
 
-## Phase 7 — Jira pack (size: M) · Phase 8 — Slack pack (size: M)
+## Phase 7 — Jira pack ✅ DONE (2026-07-27) · Phase 8 — Slack pack ✅ DONE (retargeted 2026-07-27)
 
-- [ ] Jira: JQL constraint plugin (project allowlist, forbid unbounded sweeps), `maxResults` rewrite,
-      customer-PII redaction profile, JSM content = taint source, roles support-agent/project-admin/bot, goldens
-- Slack (`connectors/slack/`, in progress — targets Slack's **first-party** server at
-  `mcp.slack.com`, chosen over the archived `@modelcontextprotocol/server-slack`):
-  - [x] 16-tool risk-classified `tools.yaml`; default-deny `policy.yaml`
-  - [x] Channel-ACL constraints (`exec`/`hr`/`legal`/`board`/`payroll`/`security`/`incident`)
-  - [x] History redaction — `strict` on conversational text, `standard` on profiles,
-        `quarantine` on `read_file` (opaque content has no useful partial view)
-  - [x] Writes approval-gated; `roles.yaml` (workspace-admin / support-agent / bot)
-  - [x] Taint read → send, with `sequence_rules` restating each exfiltration path
-  - [x] 31 goldens + 28 session-state tests (`tests/unit/test_slack_sequence.py`;
-        the golden harness cannot reach the sequence gate)
-  - [ ] **Blocked — tool identifiers unverified.** Slack documents capabilities in
-        prose, not `tools/call` ids, and the server is absent from the MCP registry.
-        Needs one `tools/list` against a live workspace (see the pack README).
-  - [ ] **Blocked — no remote upstream.** `transports/upstream.py` is
-        `SubprocessUpstream`-only; Slack's server is remote Streamable HTTP behind
-        OAuth. `wrap` works today only via an `mcp-remote` stdio↔HTTP bridge.
-        A native HTTP upstream is framework work, not pack work.
-  - [ ] `rate_limit` action — **deferred by decision**, raised as an issue rather than
-        built: it needs per-tool call timestamps on `Session` plus registry/schema/loader
-        edits, i.e. a framework change, which sits badly against this phase's own
-        "zero engine changes" exit criterion and collides with the GitHub pack's files.
+**Both packs cover the ENTIRE, source-verified tool surface** of their upstream —
+the same rigor as the GitHub pack (extract from source, guard the count in a
+test, default-deny with an explicit rule per tool). The deciding constraint: a
+complete default-deny policy needs verifiable `tools/call` identifiers, which
+only a **source-extractable** server can give — so both target open-source
+servers, and each ships a committed `tools/extract_inventory.py` so an upstream
+bump is a mechanical re-run + a risk review.
 
-**Exit criteria (each):** real server policed e2e; pack authored purely with
-framework primitives — zero engine changes (that's the pluggability proof).
+### Phase 7 — Jira pack (`connectors/jira/`) — [`sooperset/mcp-atlassian`]
+
+- [x] **All 63 `jira_*` tools**, extracted from `servers/jira.py` (`@jira_mcp.tool`
+      decorators). Default-deny; every tool has an explicit rule
+- [x] 36 reads → `redact:standard`; 2 attachment/image reads → `quarantine`
+      (opaque bytes); 24 writes → `require_approval`; `jira_delete_issue` → `block`
+      (only destructive)
+- [x] Taint: 14 content-read sources (issues, JSM customer requests, dev info),
+      7 sinks (`create_remote_issue_link` — the external-URL exfil channel —
+      `create_issue`, comments, `create_customer_request`), 4 sequence rules
+- [x] `roles.yaml`: support-agent (JSM comment/transition un-gated) /
+      project-admin (writes un-gated **except** the destructive delete) / bot
+      (all writes blocked). No role escalates delete (test-enforced)
+- [x] 22 goldens + `tests/unit/test_jira_pack.py` (13: full-surface count guard,
+      action⇄risk agreement, role invariants, taint wired); README threat model
+      (Jira as an ingestion point for attacker text + an external-link exfil
+      channel). Deferred: JQL constraint plugin / `maxResults` rewrite (needs the
+      connector-local constraint plugin the framework defers — reads are
+      `redact`-ed meanwhile)
+
+### Phase 8 — Slack pack (`connectors/slack/`) — RETARGETED to [`korotovsky/slack-mcp-server`]
+
+The pack originally targeted Slack's **first-party** `mcp.slack.com`, which was
+permanently blocked: Slack documents that server in prose and never publishes
+`tools/call` ids, so a verifiable complete policy is impossible from outside.
+Retargeted to `korotovsky/slack-mcp-server` — the most powerful open-source Slack
+MCP server, source-extractable — which unblocks it AND satisfies "the entire tool
+surface." The transferable threat-model prose (Slack as a prompt-injection
+delivery vector; content inspection over tool identity) carried over.
+
+- [x] **All 22 tools**, extracted from `pkg/server/server.go` (`Tool*` constants +
+      `NewTool` registrations). Default-deny; explicit rule per tool
+- [x] 5 message/file reads → `redact:strict`; `attachment_get_data` →
+      `quarantine`; 4 metadata reads → `redact:standard`; 12 writes →
+      `require_approval`. **No destructive rules** — the server exposes no
+      delete/archive tool (test-pinned); anything new lands under default-deny
+- [x] Taint: 7 content-read sources, sinks `conversations_add_message` (primary
+      exfil: a DM leaves instantly, invisible to channel monitoring) +
+      `usergroups_create/update`; 3 sequence rules. `roles.yaml`
+      (support-agent / workspace-admin / bot) — taint still applies over a grant
+- [x] 18 goldens + `tests/unit/test_slack_pack.py` (12) + `test_slack_sequence.py`
+      (22 session-state tests — the golden harness can't reach the sequence gate);
+      README documents the retargeting rationale; `overrides.example.yaml`
+      (channel-ID ACL, search tightening, taint-relaxation caveat)
+
+**Exit criteria: MET.** Both real servers policed by a complete default-deny
+policy; both authored purely with framework primitives — **zero engine changes**
+(the pluggability proof). `policy ci` discovers and passes both automatically
+(coverage 63/63 and 22/22; backtest zero-diff). Deferred, unchanged: a native
+remote HTTP upstream (both servers also ship stdio/container entrypoints the
+gateway launches directly); per-connector constraint plugins; the `rate_limit`
+action (a framework change, raised as an issue not built).
 
 ## Phases 9–11 are independent of each other; 9 before 11 is recommended (principal-level audit enriches SIEM events).
 

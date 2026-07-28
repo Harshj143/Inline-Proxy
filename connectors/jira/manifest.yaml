@@ -1,0 +1,42 @@
+# Connector manifest — what this pack protects and how to launch it.
+# See docs/CONTRIBUTING.md for the authoring guide.
+name: jira
+description: "Security pack for the Jira MCP server (63 Jira tools, default-deny)"
+upstream:
+  server: mcp-atlassian
+  repository: https://github.com/sooperset/mcp-atlassian
+  # Distributed as a Python package and a container image. This pack polices the
+  # Jira half of the server (the `jira_*` tools); the Confluence half is a
+  # sibling surface and out of scope here.
+  package: ghcr.io/sooperset/mcp-atlassian
+  # The inventory in tools.yaml was extracted from this source revision.
+  # (mcp-atlassian versions dynamically; pin the commit the extract was run at.)
+  tested_versions: ["main@1bd07da (2026-07-25)"]
+  # The upstream authenticates itself to Atlassian; the gateway never sees the
+  # token beyond passing the environment through to the subprocess it launches.
+  credentials_env:
+    - JIRA_URL
+    - JIRA_USERNAME
+    - JIRA_API_TOKEN
+    - JIRA_PERSONAL_TOKEN
+# Template command the gateway launches in sidecar mode. Requires the Jira
+# credentials above in the environment. `--jira-only` keeps the surface to the
+# 63 tools this pack reviews (the image also ships Confluence tools):
+#   mcp-gateway wrap --connector jira -- \
+#     docker run -i --rm -e JIRA_URL -e JIRA_USERNAME -e JIRA_API_TOKEN \
+#       ghcr.io/sooperset/mcp-atlassian --transport stdio --jira-only
+launch:
+  - docker
+  - run
+  - -i
+  - --rm
+  - -e
+  - JIRA_URL
+  - -e
+  - JIRA_USERNAME
+  - -e
+  - JIRA_API_TOKEN
+  - ghcr.io/sooperset/mcp-atlassian
+  - --transport
+  - stdio
+  - --jira-only

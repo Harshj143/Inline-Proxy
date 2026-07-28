@@ -1,36 +1,40 @@
 # Connector manifest — what this pack protects and how to launch it.
 # See docs/CONTRIBUTING.md for the authoring guide.
 name: slack
-description: "Security pack for Slack's first-party MCP server (mcp.slack.com)"
-
+description: "Security pack for the Slack MCP server (22 tools, default-deny)"
 upstream:
   server: slack-mcp-server
-  # Slack's server is REMOTE and first-party: JSON-RPC 2.0 over Streamable
-  # HTTP at https://mcp.slack.com/mcp, authenticated with confidential OAuth
-  # 2.0 user tokens. There is no npm/PyPI package to install — the "package"
-  # is Slack's hosted endpoint.
-  package: "https://mcp.slack.com/mcp"
-  transport: streamable-http
-  auth: oauth2-confidential-user-token
-  # Slack requires the calling app to be directory-published or internal;
-  # unlisted apps are refused.
-  app_requirement: directory-published-or-internal
-
-  # ⚠️  EMPTY ON PURPOSE. This pack has not yet been validated against a live
-  # workspace. Filling this in is the gate described in README.md
-  # § "Verifying the inventory": run `tools/list`, reconcile the identifiers in
-  # tools.yaml and policy.yaml, then record the server version here.
-  tested_versions: []
-
-# Template command for sidecar (`wrap`) mode.
-#
-# ⚠️  The gateway cannot currently reach a remote MCP server directly:
-# transports/upstream.py implements SubprocessUpstream only, so `wrap` and
-# `serve` both expect to LAUNCH the upstream as a child process. Slack's server
-# is remote-only. The command below bridges the gap by running a stdio↔HTTP
-# proxy as that child process; it also owns the OAuth flow, which the gateway
-# has no way to perform. See README.md § "Deploying this pack".
-#
-# A native HTTP upstream is the cleaner answer and is tracked as framework
-# work, not pack work.
-launch: ["npx", "-y", "mcp-remote", "https://mcp.slack.com/mcp"]
+  repository: https://github.com/korotovsky/slack-mcp-server
+  # The most powerful open-source Slack MCP server. Source-extractable, so this
+  # pack can police the ENTIRE, VERIFIED tool surface — see README.md
+  # § "Why this server, not Slack's first-party endpoint". Distributed as a Go
+  # binary and a container image.
+  package: ghcr.io/korotovsky/slack-mcp-server
+  # The inventory in tools.yaml was extracted from this source revision.
+  tested_versions: ["master@b88c0de (2026-05-15)"]
+  # The upstream authenticates to Slack (bot xoxb, or browser xoxc/xoxd session
+  # tokens); the gateway never sees the token beyond passing the environment
+  # through to the subprocess it launches. Four write/read tools are additionally
+  # gated OFF by default upstream (see tools.yaml).
+  credentials_env:
+    - SLACK_MCP_XOXP_TOKEN
+    - SLACK_MCP_XOXC_TOKEN
+    - SLACK_MCP_XOXD_TOKEN
+# Template command the gateway launches in sidecar mode. Requires a Slack token
+# in the environment; enable the write tools deliberately with the upstream's
+# own env flags (SLACK_MCP_ADD_MESSAGE_TOOL, SLACK_MCP_REACTION_TOOL,
+# SLACK_MCP_ATTACHMENT_TOOL) — this pack still gates them behind approval:
+#   mcp-gateway wrap --connector slack -- \
+#     docker run -i --rm -e SLACK_MCP_XOXP_TOKEN \
+#       ghcr.io/korotovsky/slack-mcp-server mcp-server --transport stdio
+launch:
+  - docker
+  - run
+  - -i
+  - --rm
+  - -e
+  - SLACK_MCP_XOXP_TOKEN
+  - ghcr.io/korotovsky/slack-mcp-server
+  - mcp-server
+  - --transport
+  - stdio

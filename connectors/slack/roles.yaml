@@ -1,105 +1,138 @@
-# yaml-language-server: $schema=../../policies/policy.schema.json
+# Role overlays for the Slack pack — layered AFTER policy.yaml.
 #
-# Role matrix for the Slack connector — a second policy layer, merged on top of
-# policy.yaml by the connector loader (connectors/base.py `policy_layers`).
+# Field-level merge: an overlay changes only the fields it names, so a role
+# that relaxes an action still inherits the base rule's reason.
 #
-# A role overlay replaces only the fields it names, so each block below states
-# just the delta from the base rule. Roles come from the caller's identity
-# (`--role` in sidecar mode; IdP groups once Phase 9 lands).
+#   support-agent   — sends messages/reactions and manages read state as normal
+#                     work; user-group administration stays gated
+#   workspace-admin — every write un-gated (they run the workspace)
+#   bot             — unattended: no human can answer an approval prompt, so every
+#                     write is BLOCKED outright rather than left to fail closed
 #
-# Three roles, chosen by what the caller can be trusted with rather than by job
-# title: who may see raw PII, and who has a human available to approve writes.
-
+# NOTE: taint/sequence still apply on top of these grants — even for a role
+# whose send is un-gated, a session that has read untrusted content is blocked
+# from conversations_add_message by the sequence gate.
 schema_version: 1
 name: slack-roles
 
 tools:
-  # ------------------------------------------------------------ user lookups
-  search_users:
+  conversations_add_message:
     roles:
-      # An admin is already entitled to the directory through Slack's own UI;
-      # redacting it here buys nothing and breaks legitimate work.
+      support-agent:
+        action: allow
+        reason: "messaging and read-state are the support agent's normal work"
       workspace-admin:
         action: allow
-        reason: workspace admins are cleared to see the raw user directory
-
-      # Support agents genuinely need to reach a customer, but the model does
-      # not need to hold the address. `reversible` tokenizes the PII instead of
-      # masking it: the agent sees a stable token, and a human can resolve it
-      # later through `mcp-gateway detokenize`, which is audited and
-      # principal-attributed. Correlation without exposure.
-      support-agent:
-        action: redact
-        redaction: reversible
-        reason: >-
-          contact details tokenized, not destroyed — recoverable through an
-          audited detokenize, so the LLM context never holds the raw value
-
+        reason: "workspace admin performs Slack writes directly"
       bot:
-        action: redact
-        redaction: standard
-        reason: headless callers get the strictest masking; nobody is watching
-
-  fetch_user_info:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  reactions_add:
+    roles:
+      support-agent:
+        action: allow
+        reason: "messaging and read-state are the support agent's normal work"
+      workspace-admin:
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  reactions_remove:
+    roles:
+      support-agent:
+        action: allow
+        reason: "messaging and read-state are the support agent's normal work"
+      workspace-admin:
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  conversations_mark:
+    roles:
+      support-agent:
+        action: allow
+        reason: "messaging and read-state are the support agent's normal work"
+      workspace-admin:
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  conversations_leave:
+    roles:
+      support-agent:
+        action: allow
+        reason: "messaging and read-state are the support agent's normal work"
+      workspace-admin:
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  conversations_join:
+    roles:
+      support-agent:
+        action: allow
+        reason: "messaging and read-state are the support agent's normal work"
+      workspace-admin:
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  usergroups_me:
     roles:
       workspace-admin:
         action: allow
-        reason: workspace admins are cleared to see raw profile data
-      support-agent:
-        action: redact
-        redaction: reversible
-        reason: contact details tokenized for audited recovery, never shown raw
-      bot:
-        action: redact
-        redaction: standard
-        reason: headless callers get the strictest masking
-
-  # ----------------------------------------------------------------- writes
-  # `require_approval` fails closed when no approver answers, so a headless bot
-  # would already be denied at the approval stage. Blocking outright is better
-  # than relying on that: a blocked tool is hidden from `tools/list` entirely,
-  # so the model never spends a turn attempting a call that cannot succeed and
-  # never sees the tool as an option worth pursuing.
-  send_message:
-    roles:
+        reason: "workspace admin performs Slack writes directly"
       bot:
         action: block
-        reason: headless callers have no approver; outbound messaging is denied outright
-
-  draft_message:
+        reason: "unattended bot identity may not change Slack state"
+  usergroups_create:
     roles:
-      bot:
-        action: block
-        reason: headless callers have no approver
-
-  create_conversation:
-    roles:
-      bot:
-        action: block
-        reason: headless callers may not manufacture new conversations
-
-  create_canvas:
-    roles:
-      bot:
-        action: block
-        reason: headless callers have no approver
-
-  update_canvas:
-    roles:
-      bot:
-        action: block
-        reason: headless callers may not overwrite documents humans rely on
-
-  # ------------------------------------------------------------------ files
-  read_file:
-    roles:
-      # Quarantine withholds the result from the model but still flags it for a
-      # human. An admin reviewing an incident is that human, and asking them to
-      # go read the file in Slack's own UI is friction with no security gain —
-      # they already have the access.
       workspace-admin:
-        action: redact
-        redaction: strict
-        reason: >-
-          admins may see file content, scrubbed — they hold the same access in
-          Slack's UI, so quarantine would be friction without a security gain
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  usergroups_update:
+    roles:
+      workspace-admin:
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  usergroups_users_update:
+    roles:
+      workspace-admin:
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  saved_update:
+    roles:
+      support-agent:
+        action: allow
+        reason: "messaging and read-state are the support agent's normal work"
+      workspace-admin:
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"
+  saved_clear_completed:
+    roles:
+      support-agent:
+        action: allow
+        reason: "messaging and read-state are the support agent's normal work"
+      workspace-admin:
+        action: allow
+        reason: "workspace admin performs Slack writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Slack state"

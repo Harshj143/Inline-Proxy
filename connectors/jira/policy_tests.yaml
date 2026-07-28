@@ -1,0 +1,191 @@
+# Golden decision tests for the Jira connector.
+#
+# Run: mcp-gateway policy test \
+#        --policy connectors/jira/policy.yaml \
+#        --policy connectors/jira/roles.yaml \
+#        --tests  connectors/jira/policy_tests.yaml
+# Also enforced in CI via tests/unit/test_jira_pack.py, which additionally
+# asserts EVERY tool in tools.yaml has an explicit rule (no silent default-deny).
+#
+# One representative case per risk class and per role decision. Taint/sequence
+# are session-state controls, so they are NOT covered here (the golden harness is
+# static-policy only) — see tests/unit/test_jira_pack.py::test_taint_model_is_wired.
+tests:
+  # ---------------------------------------------------------------- reads
+  - name: issue read is redacted (and is a taint source at runtime)
+    tool: jira_get_issue
+    arguments: { issue_key: PROJ-1 }
+    expect:
+      outcome: allow
+      action: redact
+      disposition: redact
+      reason_contains: scrub on read
+
+  - name: JQL search is redacted
+    tool: jira_search
+    arguments: { jql: "project = PROJ" }
+    expect:
+      outcome: allow
+      action: redact
+
+  - name: JSM queue issues (customer-submitted) are redacted
+    tool: jira_get_queue_issues
+    arguments: { service_desk_id: "1", queue_id: "2" }
+    expect:
+      outcome: allow
+      action: redact
+
+  - name: a user profile read is redacted (PII)
+    tool: jira_get_user_profile
+    arguments: { user_identifier: alice@example.com }
+    expect:
+      outcome: allow
+      action: redact
+
+  - name: pure-metadata reads are still redacted (uniform read posture)
+    tool: jira_get_transitions
+    arguments: { issue_key: PROJ-1 }
+    expect:
+      outcome: allow
+      action: redact
+
+  # ------------------------------------------------ secret-adjacent reads
+  - name: attachment downloads are quarantined, never shown to the model
+    tool: jira_download_attachments
+    arguments: { issue_key: PROJ-1 }
+    expect:
+      outcome: allow
+      action: quarantine
+      disposition: quarantine
+      reason_contains: opaque
+
+  - name: issue images are quarantined (opaque bytes)
+    tool: jira_get_issue_images
+    arguments: { issue_key: PROJ-1 }
+    expect:
+      outcome: allow
+      action: quarantine
+      disposition: quarantine
+
+  # --------------------------------------------------------------- writes
+  - name: creating an issue needs a human (and is a taint sink at runtime)
+    tool: jira_create_issue
+    arguments: { project_key: PROJ, summary: bug, issue_type: Bug }
+    expect:
+      outcome: deny            # fail-closed until an approver is wired
+      action: require_approval
+      reason_contains: approval
+
+  - name: adding a comment needs a human (JSM exfil path)
+    tool: jira_add_comment
+    arguments: { issue_key: PROJ-1, comment: hello }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: a remote issue link needs a human (classic exfiltration path)
+    tool: jira_create_remote_issue_link
+    arguments: { issue_key: PROJ-1, url: "https://x.example/y" }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: transitioning an issue needs a human
+    tool: jira_transition_issue
+    arguments: { issue_key: PROJ-1, transition: Done }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: moving an issue to another project needs a human
+    tool: jira_move_issue
+    arguments: { issue_key: PROJ-1, target_project_key: OTHER }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  # ---------------------------------------------------------- destructive
+  - name: deleting an issue is blocked outright
+    tool: jira_delete_issue
+    arguments: { issue_key: PROJ-1 }
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: irreversible
+
+  # -------------------------------------------------------------- default
+  - name: a tool with no rule meets default deny
+    tool: some_future_jira_tool
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: default policy
+
+  # ---------------------------------------------------------------- roles
+  - name: support-agent may comment without an approval round-trip
+    tool: jira_add_comment
+    role: support-agent
+    arguments: { issue_key: PROJ-1, comment: "on it" }
+    expect:
+      outcome: allow
+      action: allow
+      reason_contains: JSM front-line
+
+  - name: support-agent may transition (their normal JSM work)
+    tool: jira_transition_issue
+    role: support-agent
+    arguments: { issue_key: PROJ-1, transition: "In Progress" }
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: support-agent still cannot create an issue (not their grant)
+    tool: jira_create_issue
+    role: support-agent
+    arguments: { project_key: PROJ, summary: x, issue_type: Bug }
+    expect:
+      outcome: deny
+      action: require_approval
+
+  - name: project-admin may create an issue directly
+    tool: jira_create_issue
+    role: project-admin
+    arguments: { project_key: PROJ, summary: x, issue_type: Bug }
+    expect:
+      outcome: allow
+      action: allow
+      reason_contains: project owner
+
+  - name: project-admin may create a remote link
+    tool: jira_create_remote_issue_link
+    role: project-admin
+    arguments: { issue_key: PROJ-1, url: "https://x.example/y" }
+    expect:
+      outcome: allow
+      action: allow
+
+  - name: no role escalates the destructive delete
+    tool: jira_delete_issue
+    role: project-admin
+    arguments: { issue_key: PROJ-1 }
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: irreversible
+
+  - name: bot identity cannot write at all (no human to approve)
+    tool: jira_create_issue
+    role: bot
+    arguments: { project_key: PROJ, summary: auto, issue_type: Task }
+    expect:
+      outcome: deny
+      action: block
+      reason_contains: unattended bot
+
+  - name: bot may still read (redacted)
+    tool: jira_get_issue
+    role: bot
+    arguments: { issue_key: PROJ-1 }
+    expect:
+      outcome: allow
+      action: redact
