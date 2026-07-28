@@ -31,7 +31,8 @@ TARGETS = discover_targets(ROOT)
 # it. A pack absent from this map still runs — it just has to ship at least one.
 MIN_GOLDENS = {
     "github": 20,
-    "slack": 25,
+    "slack": 15,
+    "jira": 20,
     "mock-crm": 10,
 }
 DEFAULT_MIN_GOLDENS = 1

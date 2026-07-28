@@ -108,9 +108,10 @@ def test_project_admin_gets_writes_but_not_delete(connector, engine):
 def test_support_agent_gets_jsm_work_only(engine):
     """Comment/transition are the JSM front line's normal work; issue creation
     is not their grant and stays gated."""
-    assert engine.evaluate("jira_add_comment", {}, role="support-agent").action == "allow"
-    assert engine.evaluate("jira_transition_issue", {}, role="support-agent").action == "allow"
-    assert engine.evaluate("jira_create_issue", {}, role="support-agent").action == "require_approval"
+    ev = lambda tool: engine.evaluate(tool, {}, role="support-agent").action  # noqa: E731
+    assert ev("jira_add_comment") == "allow"
+    assert ev("jira_transition_issue") == "allow"
+    assert ev("jira_create_issue") == "require_approval"
 
 
 def test_taint_model_is_wired(engine):
