@@ -1,0 +1,238 @@
+# Role overlays for the Jira pack — layered AFTER policy.yaml.
+#
+# Field-level merge: an overlay changes only the fields it names, so a role
+# that relaxes an action still inherits the base rule's redaction/reason.
+# Least privilege is the default; these are deliberate, narrow grants.
+#
+#   support-agent — JSM front line: comment/worklog/transition/customer-request
+#                   are un-gated (their normal work); issue mutation still gated
+#   project-admin — owns the project: every approval-gated write is un-gated
+#                   EXCEPT the destructive delete (no role escalates that)
+#   bot           — unattended: no human can answer an approval prompt, so every
+#                   write is BLOCKED outright rather than left to fail closed
+schema_version: 1
+name: jira-roles
+
+tools:
+  jira_add_comment:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_add_issues_to_sprint:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_add_watcher:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_add_worklog:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_assign_issue:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_batch_create_issues:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_batch_create_versions:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_create_customer_request:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_create_issue:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_create_issue_link:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_create_remote_issue_link:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_create_sprint:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_create_version:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_edit_comment:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_link_to_epic:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_move_issue:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_move_issues_to_backlog:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_remove_issue_link:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_remove_watcher:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_transition_issue:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_update_issue:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_update_proforma_form_answers:
+    roles:
+      support-agent:
+        action: allow
+        reason: "JSM front-line work: comment/worklog/transition/customer-request"
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_update_sprint:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"
+  jira_update_version:
+    roles:
+      project-admin:
+        action: allow
+        reason: "project owner performs issue and project writes directly"
+      bot:
+        action: block
+        reason: "unattended bot identity may not change Jira state"

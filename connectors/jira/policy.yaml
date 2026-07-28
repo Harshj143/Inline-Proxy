@@ -1,0 +1,297 @@
+# yaml-language-server: $schema=../../policies/policy.schema.json
+#
+# Default security policy for the Jira MCP server (sooperset/mcp-atlassian).
+# DEFAULT-DENY over the full 63-tool Jira surface. See README.md for the threat model.
+#   reads            -> redact (Jira issues/comments carry PII and injected text)
+#   attachments      -> quarantine (opaque bytes: a .env, a customer CSV, a keystore)
+#   writes           -> require_approval (a human signs off)
+#   destructive      -> block (permanent deletion)
+# Untrusted content reads (issues, JSM customer requests, dev info) taint the
+# session; exfil-capable writes (external links, comments, new issues) are then blocked.
+schema_version: 1
+name: jira
+default_action: block
+
+taint_sources: [jira_batch_get_changelogs, jira_download_attachments, jira_get_board_issues, jira_get_issue, jira_get_issue_development_info, jira_get_issue_images, jira_get_issues_development_info, jira_get_project_issues, jira_get_queue_issues, jira_get_request_type_fields, jira_get_request_types, jira_get_sprint_issues, jira_get_worklog, jira_search]
+taint_sinks: [jira_add_comment, jira_batch_create_issues, jira_create_customer_request, jira_create_issue, jira_create_remote_issue_link, jira_edit_comment, jira_update_proforma_form_answers]
+
+sequence_rules:
+  - after: jira_get_queue_issues
+    forbid: jira_create_remote_issue_link
+    reason: "no external link right after reading a JSM customer request (exfil guard)"
+  - after: jira_get_queue_issues
+    forbid: jira_add_comment
+    reason: "no comment right after reading a JSM customer request — an injected instruction must not be echoed back to the customer portal"
+  - after: jira_download_attachments
+    forbid: jira_create_remote_issue_link
+    reason: "no external link right after downloading an attachment (exfil guard)"
+  - after: jira_get_issue_development_info
+    forbid: jira_create_remote_issue_link
+    reason: "no external link right after reading commit/branch data (may carry secrets)"
+
+tools:
+  # ---- jira_agile ----
+  jira_add_issues_to_sprint:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_create_sprint:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_get_agile_boards:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_board_issues:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_sprint_issues:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_sprints_from_board:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_move_issues_to_backlog:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_update_sprint:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  # ---- jira_attachments ----
+  jira_download_attachments:
+    action: quarantine
+    reason: "opaque attachment/image bytes; withheld from the model for review"
+  jira_get_issue_images:
+    action: quarantine
+    reason: "opaque attachment/image bytes; withheld from the model for review"
+  # ---- jira_comments ----
+  jira_add_comment:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_edit_comment:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  # ---- jira_development ----
+  jira_get_issue_development_info:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_issues_development_info:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  # ---- jira_fields ----
+  jira_get_field_options:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_search_fields:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  # ---- jira_forms ----
+  jira_get_issue_proforma_forms:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_proforma_form_details:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_update_proforma_form_answers:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  # ---- jira_issues ----
+  jira_assign_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_batch_create_issues:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_batch_get_changelogs:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_create_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_delete_issue:
+    action: block
+    reason: "irreversible deletion; off-limits"
+  jira_get_issue:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_project_issues:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_move_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_search:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_update_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  # ---- jira_links ----
+  jira_create_issue_link:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_create_remote_issue_link:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_get_link_types:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_link_to_epic:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_remove_issue_link:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  # ---- jira_metrics ----
+  jira_get_issue_dates:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_issue_sla:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  # ---- jira_project_analysis ----
+  jira_get_cross_project_dependencies:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_project_epic_hierarchy:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  # ---- jira_projects ----
+  jira_batch_create_versions:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_create_version:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_get_all_projects:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_create_fields:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_project_components:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_project_fields:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_project_issue_types:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_project_versions:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_search_projects:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_update_version:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  # ---- jira_service_desk ----
+  jira_create_customer_request:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_get_queue_issues:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_request_type_fields:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_request_types:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_service_desk_for_project:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_get_service_desk_queues:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  # ---- jira_transitions ----
+  jira_get_transitions:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_transition_issue:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  # ---- jira_users ----
+  jira_get_user_profile:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_search_assignable_users:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  # ---- jira_watchers ----
+  jira_add_watcher:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_get_issue_watchers:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
+  jira_remove_watcher:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  # ---- jira_worklog ----
+  jira_add_worklog:
+    action: require_approval
+    then: allow
+    reason: "state-changing Jira write; a human signs off"
+  jira_get_worklog:
+    action: redact
+    redaction: standard
+    reason: "Jira content may carry PII/secrets/injected text; scrub on read"
