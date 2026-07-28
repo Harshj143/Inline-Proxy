@@ -77,6 +77,16 @@ mcp-gateway wrap --connector <name> [--override company.yaml] -- <server cmd>   
 A deployment customizes a pack with `--override` (a policy layer merged on top —
 field-level, later wins), never by forking it.
 
+**Shipped packs** (all default-deny, full source-verified surface, with a
+committed `tools/extract_inventory.py` so an upstream bump is a mechanical
+re-run): `github` (109 tools, github-mcp-server), `jira` (63 `jira_*` tools,
+sooperset/mcp-atlassian), `slack` (22 tools, korotovsky/slack-mcp-server — chosen
+over Slack's first-party server, which publishes no `tools/call` ids to police),
+plus `example` (the scaffold reference) and the standalone `policies/mock-crm.yaml`.
+A full-surface pack ships a `test_<name>_pack.py` that guards the tool count and
+asserts every inventoried tool has an explicit rule — so an upstream that adds a
+tool fails CI until the pack is re-reviewed.
+
 `policy ci` (`policy/ci.py`) **discovers** packs rather than taking a list, so a
 new pack is checked with no workflow or test edit. It validates every layer plus
 the merged result, runs the goldens, requires every inventoried tool to have an
