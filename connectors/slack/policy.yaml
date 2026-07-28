@@ -1,236 +1,117 @@
 # yaml-language-server: $schema=../../policies/policy.schema.json
 #
-# Default security policy for the Slack connector.
-#
-# DEFAULT-DENY: a tool is blocked unless a rule below permits it. Rules use the
-# least-powerful action that still works: allow < rewrite/redact < quarantine <
-# require_approval < block. See README.md for the full threat model.
-#
-# ⚠️  Tool and argument names here are PROVISIONAL (README.md § "Verifying the
-# inventory"). Two consequences shape what this file may safely contain until
-# they are confirmed against a live `tools/list`:
-#
-#   * only `must_not_match` constraints — a `must_match` on an argument the
-#     server does not actually use is evaluated against "" and would deny every
-#     call to that tool (fail-closed, but the tool becomes unusable);
-#   * no `rewrites` at all — `set` on an absent argument ADDS it, injecting a
-#     parameter the upstream server never declared into every policed call.
-#
-# `must_not_match` is the one form that degrades to a no-op on a wrong name, so
-# it is the only argument-level control this pack ships pre-verification.
-
+# Default security policy for the Slack MCP server (korotovsky/slack-mcp-server).
+# DEFAULT-DENY over the full 22-tool surface. See README.md for the threat model.
+#   message/file reads -> strict redact (Slack is where humans paste secrets)
+#   opaque file bytes  -> quarantine (no useful partial view)
+#   metadata reads     -> redact:standard
+#   writes             -> require_approval (a human signs off)
+# This server exposes NO destructive tool (no delete/archive); if a future
+# version adds one it lands under default-deny automatically.
+# Untrusted content reads taint the session; the send path is then blocked.
 schema_version: 1
 name: slack
 default_action: block
 
-# --------------------------------------------------------------- taint model
-# Slack's entire read surface is untrusted input. Any human — including an
-# external Connect user or a stranger in a public channel — can plant text that
-# an agent will read as if it were instruction. So every content read is a
-# taint source, and everything that can carry bytes back out is a sink.
-#
-# This is what breaks the lethal trifecta without having to detect the
-# injection itself: the agent may read poisoned text, and it may (separately)
-# send messages — but not both in one session.
-taint_sources:
-  - read_channel
-  - read_thread
-  - search_messages
-  - read_file
-  - read_canvas
-  - fetch_user_info      # custom profile fields are attacker-controlled text
-  - search_users
+taint_sources: [attachment_get_data, conversations_history, conversations_replies, conversations_search_messages, conversations_unreads, saved_list, users_search]
+taint_sinks: [conversations_add_message, usergroups_create, usergroups_update]
 
-taint_sinks:
-  - send_message
-  - draft_message
-  - create_conversation
-  - create_canvas
-  - update_canvas
-
-# Defence in depth: taint already covers these, but sequence rules state the
-# specific exfiltration paths explicitly so an audit reader can see the intent,
-# and so the control survives a future policy edit that narrows taint_sources.
 sequence_rules:
-  - after: read_channel
-    forbid: send_message
-    reason: no outbound message after reading channel history (exfiltration guard)
-  - after: read_thread
-    forbid: send_message
-    reason: no outbound message after reading a thread (exfiltration guard)
-  - after: search_messages
-    forbid: send_message
-    reason: >-
-      no outbound message after a workspace-wide message search — the broadest
-      read in the pack, and the most valuable to an attacker
-  - after: read_file
-    forbid: send_message
-    reason: no outbound message after reading file content (exfiltration guard)
-  - after: read_canvas
-    forbid: send_message
-    reason: no outbound message after reading a canvas (exfiltration guard)
-  - after: search_messages
-    forbid: create_conversation
-    reason: >-
-      a session that has searched the workspace may not then open a new DM —
-      that is how an agent manufactures a channel to an outsider
+  - after: conversations_history
+    forbid: conversations_add_message
+    reason: "no send right after reading a channel (read-then-exfil guard)"
+  - after: conversations_search_messages
+    forbid: conversations_add_message
+    reason: "no send right after a workspace-wide search (crosses every channel ACL)"
+  - after: attachment_get_data
+    forbid: conversations_add_message
+    reason: "no send right after downloading a file (exfil guard)"
 
 tools:
-  # ------------------------------------------------------ discovery: allow
-  # Metadata only. Useful reconnaissance for an attacker, but blocking it costs
-  # far more usability than it buys: an agent that cannot find a channel cannot
-  # do anything at all, and the sensitive part (contents) is guarded below.
-  search_channels:
-    action: allow
-    reason: channel metadata only; contents are governed by the read rules below
-
-  search_emoji:
-    action: allow
-    reason: custom emoji inventory, the lowest-sensitivity surface on the server
-
-  list_channel_members:
-    action: allow
-    reason: >-
-      returns opaque user IDs, not profile PII; resolving an ID to a person
-      requires fetch_user_info, which is redacted
-
-  # -------------------------------------------------- people: redact the PII
-  # Profile lookups are legitimate agent work ("who owns this service?") but
-  # return email, phone, and free-text custom fields. Redact rather than block:
-  # the agent still gets the name and the org structure, the model never sees
-  # the contact details.
-  search_users:
-    action: redact
-    redaction: standard
-    reason: user directory carries email and phone; strip before the LLM sees it
-
-  fetch_user_info:
-    action: redact
-    redaction: standard
-    reason: >-
-      full profile including custom fields; PII redacted, and the free-text
-      fields are treated as untrusted (this tool is a taint source)
-
-  # ------------------------------------ message content: redact, hardest tier
-  # `strict` opportunistically adds Presidio NER when the extra is installed and
-  # degrades cleanly to the regex tier when it is not (redaction/profiles.py).
-  # Conversational text is exactly where NER earns its latency: names and
-  # locations that no regex catches.
-  #
-  # The channel ACL below is a DENYLIST, so it under-enforces until a
-  # deployment supplies its real channel identifiers via an override layer.
-  # That is why redaction, not the ACL, is the primary control on these tools:
-  # an unconfigured pack still strips credentials and PII out of #exec.
-  read_channel:
+  conversations_history:
     action: redact
     redaction: strict
-    reason: channel history is free-form human text; scrub PII and secrets
-    constraints:
-      - arg: channel
-        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
-        flags: i
-        reason: >-
-          this channel is off-limits to agents; add your workspace's real
-          channel IDs in an override layer (see overrides.example.yaml)
-      - arg: channel_id
-        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
-        flags: i
-        reason: >-
-          this channel is off-limits to agents; add your workspace's real
-          channel IDs in an override layer (see overrides.example.yaml)
-
-  read_thread:
+    reason: "Slack messages routinely carry secrets/PII/injected text; strict scrub"
+  conversations_replies:
     action: redact
     redaction: strict
-    reason: thread replies are free-form human text; scrub PII and secrets
-    constraints:
-      - arg: channel
-        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
-        flags: i
-        reason: this channel is off-limits to agents
-      - arg: channel_id
-        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
-        flags: i
-        reason: this channel is off-limits to agents
-
-  search_messages:
-    action: redact
-    redaction: strict
-    reason: >-
-      workspace-wide message and file search. The channel ACL CANNOT protect
-      this tool — search takes a query, not a channel, so it reaches into every
-      conversation the token can see, including the ones the ACL denies by
-      name. Redaction and the taint/sequence rules are the real controls here.
-      A deployment that cannot accept that residual risk should override this
-      rule to `require_approval` or `block`.
-
-  read_canvas:
-    action: redact
-    redaction: strict
-    reason: canvases hold runbooks and pasted credentials; scrub before the LLM
-
-  read_file:
+    reason: "Slack messages routinely carry secrets/PII/injected text; strict scrub"
+  conversations_add_message:
+    action: require_approval
+    then: allow
+    reason: "state-changing Slack write; a human signs off"
+  reactions_add:
+    action: require_approval
+    then: allow
+    reason: "state-changing Slack write; a human signs off"
+  reactions_remove:
+    action: require_approval
+    then: allow
+    reason: "state-changing Slack write; a human signs off"
+  attachment_get_data:
     action: quarantine
-    reason: >-
-      file content is opaque and arbitrary — a keystore, a customer CSV, a
-      .env. Unlike conversational text there is no useful partial view, so the
-      result is withheld from the model and flagged for a human instead of
-      being redacted and passed through.
-
-  # ------------------------------------------- writes: a human signs off
-  # Every write is an egress point. Approval is asked LAST in the pipeline
-  # (after policy, constraints, and the sequence gate), so an approver is never
-  # paged about a call that taint rules would have blocked anyway — that
-  # ordering is the whole reason approvals are usable in practice.
-  send_message:
+    reason: "opaque file bytes (a keystore, a .env, a customer CSV); withheld for review"
+  conversations_search_messages:
+    action: redact
+    redaction: strict
+    reason: "Slack messages routinely carry secrets/PII/injected text; strict scrub"
+  users_search:
+    action: redact
+    redaction: standard
+    reason: "Slack profile/channel metadata may carry PII; scrub on read"
+  conversations_unreads:
+    action: redact
+    redaction: strict
+    reason: "Slack messages routinely carry secrets/PII/injected text; strict scrub"
+  conversations_mark:
     action: require_approval
     then: allow
-    reason: >-
-      the primary exfiltration sink; a DM leaves the workspace instantly and is
-      invisible to channel-level monitoring
-    constraints:
-      - arg: channel
-        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
-        flags: i
-        reason: >-
-          agents may not post into this channel at all — blocked before a human
-          is asked, so nobody can approve it by reflex
-      - arg: channel_id
-        must_not_match: '^#?(exec|hr|legal|board|payroll|security|incident)(-|$)'
-        flags: i
-        reason: agents may not post into this channel at all
-
-  draft_message:
+    reason: "state-changing Slack write; a human signs off"
+  conversations_leave:
     action: require_approval
     then: allow
-    reason: >-
-      documented as preview-only, but whether a draft can be delivered without
-      a second human action is not verifiable from Slack's docs. Treated as a
-      sink until proven otherwise; downgrade to `allow` in an override once
-      your workspace confirms drafts cannot self-send.
-
-  create_conversation:
+    reason: "state-changing Slack write; a human signs off"
+  conversations_join:
     action: require_approval
     then: allow
-    reason: >-
-      creating a DM — especially with an external/Connect user — manufactures
-      an egress path no channel allowlist anticipated
-
-  create_canvas:
+    reason: "state-changing Slack write; a human signs off"
+  channels_list:
+    action: redact
+    redaction: standard
+    reason: "Slack profile/channel metadata may carry PII; scrub on read"
+  channels_me:
+    action: redact
+    redaction: standard
+    reason: "Slack profile/channel metadata may carry PII; scrub on read"
+  usergroups_list:
+    action: redact
+    redaction: standard
+    reason: "Slack profile/channel metadata may carry PII; scrub on read"
+  usergroups_me:
     action: require_approval
     then: allow
-    reason: canvas creation is content egress in document form
-
-  update_canvas:
+    reason: "state-changing Slack write; a human signs off"
+  usergroups_create:
     action: require_approval
     then: allow
-    reason: >-
-      overwrites a document other humans treat as authoritative; a poisoned
-      runbook is a durable attack on the next reader, human or agent
-
-  add_reaction:
-    action: allow
-    reason: >-
-      a covert channel in theory (a few bits per message) but far too
-      low-bandwidth to be a practical exfiltration route; blocking it would
-      cost ordinary usability for no real gain
+    reason: "state-changing Slack write; a human signs off"
+  usergroups_update:
+    action: require_approval
+    then: allow
+    reason: "state-changing Slack write; a human signs off"
+  usergroups_users_update:
+    action: require_approval
+    then: allow
+    reason: "state-changing Slack write; a human signs off"
+  saved_list:
+    action: redact
+    redaction: strict
+    reason: "Slack messages routinely carry secrets/PII/injected text; strict scrub"
+  saved_update:
+    action: require_approval
+    then: allow
+    reason: "state-changing Slack write; a human signs off"
+  saved_clear_completed:
+    action: require_approval
+    then: allow
+    reason: "state-changing Slack write; a human signs off"

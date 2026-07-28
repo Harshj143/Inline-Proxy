@@ -1,111 +1,82 @@
-# Tool inventory for the Slack MCP server, risk-classified.
+# Complete tool inventory for the Slack MCP server.
 #
-# Informational: this documents and reviews the attack surface; policy.yaml is
-# what enforces. Every tool the server exposes should appear here with a risk:
-#   read | write | destructive | secret_adjacent
+# Source of truth: korotovsky/slack-mcp-server, extracted from the Tool*
+# constants + NewTool registrations in pkg/server/server.go — ALL 22 tools,
+# nothing omitted. `risk` is this pack's security classification and is what
+# policy.yaml acts on:
+#   read            — metadata/profile read (redacted: Slack text is untrusted)
+#   secret_adjacent — message/file content: strict redaction, or quarantine when opaque
+#   write           — changes state (approval-gated)
+#   destructive     — irreversible data loss (this server exposes NONE)
 #
-# ⚠️  PROVISIONAL TOOL IDENTIFIERS — see README.md § "Verifying the inventory".
-# Slack documents this server's capabilities in prose, not as `tools/call`
-# identifiers, and the server is not in the MCP registry. The names below are
-# derived from Slack's own capability table; they MUST be confirmed against a
-# live `tools/list` before this pack is trusted in production. A name that is
-# wrong simply never matches, and default-deny then blocks the real tool — the
-# failure direction is closed, but the pack is inert until the names are right.
-#
-# Why "secret_adjacent" is used so heavily here: Slack is where humans paste
-# things. API keys in an #incidents thread, a .env in a DM, a customer CSV in a
-# canvas. Unlike a database, the sensitivity of a Slack payload is not a
-# property of the tool — it is a property of whatever a human happened to type.
-# That is the core reason this pack leans on content inspection (redaction)
-# rather than on tool identity alone.
-
+# Four write/read tools (conversations_add_message, reactions_add/remove,
+# attachment_get_data) are env-gated OFF by default upstream; they are
+# inventoried anyway so a rule is ready the moment an operator enables them.
+# Regenerate with tools/extract_inventory.py after an upstream bump.
 tools:
-  # ---------------------------------------------------------------- discovery
-  # Low-sensitivity metadata. Channel names and topics are not secrets in most
-  # workspaces, but they are excellent reconnaissance: an agent that can
-  # enumerate #project-titan-acquisition learns something before reading a word.
-  search_channels:
-    risk: read
-    description: Find public/private channels, filtered by name and description.
-  search_emoji:
-    risk: read
-    description: List custom emoji in the workspace. Lowest-sensitivity tool here.
-
-  # ------------------------------------------------------------- people / PII
-  # Slack profiles carry email, phone, title, and arbitrary custom fields.
-  # Custom fields are attacker-controllable text in any shared/Connect
-  # workspace, which is why user lookups are taint sources as well as PII reads.
-  search_users:
-    risk: read
-    description: Find workspace members by name, email, or user ID.
-  fetch_user_info:
-    risk: read
-    description: Full profile for one user, including custom fields.
-  list_channel_members:
-    risk: read
-    description: User IDs belonging to a channel. Maps the org chart.
-
-  # --------------------------------------------------- message / file content
-  # The heart of the threat surface. Everything below returns free-form human
-  # text that may contain credentials, customer PII, or an injected instruction
-  # aimed at the agent reading it.
-  read_channel:
+  conversations_history:
     risk: secret_adjacent
-    description: Full message history for a channel.
-  read_thread:
+    description: "Get messages from the channel (or DM) by channel_id, the last row/column in the response is used as 'cursor' parameter for pagination if not empty"
+  conversations_replies:
     risk: secret_adjacent
-    description: All replies in one thread.
-  search_messages:
+    description: "Get a thread of messages posted to a conversation by channelID and thread_ts, the last row/column in the response is used as 'cursor' parameter for pagination i"
+  conversations_add_message:
+    risk: write
+    description: "Add a message to a public channel, private channel, or direct message (DM, or IM) conversation by channel_id and thread_ts."
+  reactions_add:
+    risk: write
+    description: "Add an emoji reaction to a message in a public channel, private channel, or direct message (DM, or IM) conversation."
+  reactions_remove:
+    risk: write
+    description: "Remove an emoji reaction from a message in a public channel, private channel, or direct message (DM, or IM) conversation."
+  attachment_get_data:
     risk: secret_adjacent
-    description: >-
-      Search messages AND files across the workspace, filtered by date, user,
-      and content type. The single most dangerous read: it crosses every
-      channel boundary at once, so a channel ACL that only guards read_channel
-      is trivially bypassed through search.
-  read_file:
+    description: "Download an attachment's content by file ID. Returns file metadata and content (text files as-is, binary files as base64). Maximum file size is 5MB."
+  conversations_search_messages:
     risk: secret_adjacent
-    description: >-
-      Retrieve file content. Opaque and arbitrary — a keystore, a customer CSV,
-      a .env. Unlike conversational text, there is no useful partial view.
-  read_canvas:
+    description: "Search messages in a public channel, private channel, or direct message (DM, or IM) conversation using filters. All filters are optional, if not provided then s"
+  users_search:
+    risk: read
+    description: "Search for users by name, email, display name, or Slack user ID. If a Slack user ID is provided (e.g. U07VCEPP4N5), the user is looked up directly. Returns user"
+  conversations_unreads:
     risk: secret_adjacent
-    description: Export a canvas as markdown. Canvases hold runbooks and credentials.
-
-  # -------------------------------------------------------------- write / out
-  # Every tool below can move bytes out of the trust boundary, which makes each
-  # one an exfiltration sink once the session has read untrusted content.
-  send_message:
+    description: "Get unread messages across all channels. With browser session tokens (xoxc/xoxd), uses a single API call for complete results. With OAuth user tokens (xoxp), sc"
+  conversations_mark:
     risk: write
-    description: >-
-      Deliver a message to any conversation — channel, DM, group DM. The
-      primary exfiltration sink: a DM to an attacker-controlled account leaves
-      the workspace instantly and is invisible to channel-level monitoring.
-  draft_message:
+    description: "Mark a channel or DM as read. If no timestamp is provided, marks all messages as read."
+  conversations_leave:
     risk: write
-    description: >-
-      Draft, format, and preview a message in the client. Documented as
-      preview-only, but whether a draft can be delivered without a second human
-      action is NOT verifiable from the docs — treated as a sink until proven.
-  create_conversation:
+    description: "Leave a channel, group conversation, or DM. Cannot leave the #general channel."
+  conversations_join:
     risk: write
-    description: >-
-      Create a channel or DM. Creating a DM with an external/Connect user
-      manufactures an exfiltration path that no channel allowlist anticipated.
-  create_canvas:
+    description: "Join a public channel. Use channels_list or channels_me to find channel IDs."
+  channels_list:
+    risk: read
+    description: "Get list of channels"
+  channels_me:
+    risk: read
+    description: "List channels you are a member of. Unlike channels_list which returns all workspace channels, this returns only channels you have joined. Useful on large worksp"
+  usergroups_list:
+    risk: read
+    description: "List all user groups (subteams) in the Slack workspace. User groups are mention groups like @engineering or @design that notify all members. Use this to discove"
+  usergroups_me:
     risk: write
-    description: Create a canvas. Rich document creation — another content sink.
-  update_canvas:
+    description: "Manage your own user group membership. Use action='list' to see which groups you belong to. Use action='join' with a usergroup_id to add yourself to a group (e."
+  usergroups_create:
     risk: write
-    description: Modify an existing canvas. Can overwrite a runbook other humans trust.
-  add_reaction:
+    description: "Create a new user group (mention group) in the Slack workspace. After creation, use usergroups_users_update to add members, or users can join themselves with us"
+  usergroups_update:
     risk: write
-    description: >-
-      Apply an emoji reaction. Technically a covert channel (a few bits per
-      message) but far too low-bandwidth to be a practical exfiltration route.
-
-# ---------------------------------------------------------------- not present
-# Slack's documented capability set contains NO destructive tool — no message
-# deletion, no channel archival, no user deactivation. That is why this pack
-# ships no `block`-on-destructive rules: there is nothing to block. If a future
-# server version adds one it lands under default-deny automatically, which is
-# the correct default. Re-inventory on every upstream version bump.
+    description: "Update a user group's metadata: name, handle (@mention), description, or default channels. Does NOT change members - use usergroups_users_update for that. At le"
+  usergroups_users_update:
+    risk: write
+    description: "Replace all members of a user group with a new list. WARNING: This completely replaces the member list - any user not in the 'users' parameter will be removed. "
+  saved_list:
+    risk: secret_adjacent
+    description: "List saved items from Slack's 'Save for Later' panel. Returns items the user has saved, with optional message content. Replaces the deprecated stars.list API. R"
+  saved_update:
+    risk: write
+    description: "Update a saved item: mark as completed, set a due date, or both. Use item_id and ts values from saved_list output. Replaces the deprecated stars.add/stars.remov"
+  saved_clear_completed:
+    risk: write
+    description: "Clear all completed saved items from the 'Save for Later' panel. This is a bulk operation that removes all items with state='completed'."
