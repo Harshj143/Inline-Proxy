@@ -11,6 +11,12 @@ audit:
 state:
   backend: memory             # memory today; redis/postgres arrive in Phase 5c
 
+# Optional (Phase 9). Uncomment to require an authenticated caller on every
+# endpoint — an OIDC Bearer token or a static API key (see identity.example.yaml).
+# Without it the service authenticates nobody (a trusted-network deployment).
+# identity:
+#   config: identity.example.yaml
+
 upstreams:
   - name: mock
     command: ["python", "demo/mock_server.py"]

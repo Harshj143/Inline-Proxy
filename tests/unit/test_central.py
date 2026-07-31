@@ -70,6 +70,33 @@ upstreams:
     config = load_gateway_config(cfg)
     assert config.spool_path == "audit.log"
     assert config.state_backend == "memory"
+    assert config.identity_path is None       # no identity → authenticate nobody
+
+
+def test_identity_config_path_is_resolved_relative_to_the_gateway_file(tmp_path):
+    cfg = _write(tmp_path, """
+upstreams:
+  - name: only
+    command: ["x"]
+    policy: ["p.yaml"]
+identity:
+  config: identity.yaml
+""")
+    config = load_gateway_config(cfg)
+    # Resolved against the gateway.yaml's own directory so the two ship together.
+    assert config.identity_path == str((tmp_path / "identity.yaml").resolve())
+
+
+def test_identity_block_must_be_a_mapping(tmp_path):
+    cfg = _write(tmp_path, """
+upstreams:
+  - name: only
+    command: ["x"]
+    policy: ["p.yaml"]
+identity: "not-a-mapping"
+""")
+    with pytest.raises(GatewayError, match="identity"):
+        load_gateway_config(cfg)
 
 
 def test_json_config(tmp_path):

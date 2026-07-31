@@ -46,6 +46,8 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from mcp_gateway.audit.recorder import AuditRecorder, AuditSink
+from mcp_gateway.core.context import Principal
+from mcp_gateway.core.errors import IdentityError
 from mcp_gateway.core.gateway import SecurityGateway
 from mcp_gateway.protocol.jsonrpc import decode_line, encode, error_response
 from mcp_gateway.protocol.mcp import METHOD_INITIALIZE
@@ -164,17 +166,36 @@ SessionParts = Callable[[str], "tuple[SecurityGateway, Upstream]"]
 
 
 class StreamableHttpGateway:
-    """Owns the live sessions for one upstream and their lifecycle."""
+    """Owns the live sessions for one upstream and their lifecycle.
 
-    def __init__(self, session_parts: SessionParts, *, response_timeout: float = 30.0):
+    An optional `resolver` turns on per-request authentication: when present,
+    every HTTP request must carry a credential that resolves to a principal, and
+    a session is bound to the principal that created it. When absent, the
+    transport authenticates nobody (sidecar/tests), and sessions use the default
+    principal — the pre-Phase-9 behavior, preserved.
+    """
+
+    def __init__(
+        self,
+        session_parts: SessionParts,
+        *,
+        response_timeout: float = 30.0,
+        resolver=None,
+    ):
         self._session_parts = session_parts
         self._response_timeout = response_timeout
+        self.resolver = resolver
         self._sessions: dict[str, _Session] = {}
         self._lock = asyncio.Lock()
 
-    async def create(self) -> _Session:
+    async def create(self, principal: Principal | None = None) -> _Session:
         session_id = uuid.uuid4().hex
         gateway, upstream = self._session_parts(session_id)
+        if principal is not None:
+            # Bind the authenticated caller BEFORE on_start, so the gateway_start
+            # event and every later decision are attributed to the real identity,
+            # not the default principal build_session_parts baked in.
+            gateway.principal = principal
         session = _Session(session_id, gateway, upstream, self._response_timeout)
         gateway.bind_transport(session)
         await gateway.on_start(getattr(upstream, "command", ["<upstream>"]))
@@ -255,6 +276,51 @@ def _rpc_error(request_id: Any, code: int, message: str, status: int) -> JSONRes
     )
 
 
+# JSON-RPC implementation-defined codes for the auth failures.
+ERROR_UNAUTHENTICATED = -32003
+ERROR_FORBIDDEN = -32005
+
+
+def _unauthorized(request_id: Any, message: str) -> JSONResponse:
+    """A fail-closed 401. The WWW-Authenticate header tells a client how to retry
+    (present a Bearer token), per RFC 6750."""
+    resp = _rpc_error(request_id, ERROR_UNAUTHENTICATED, f"unauthenticated: {message}", 401)
+    resp.headers["WWW-Authenticate"] = 'Bearer, ApiKey'
+    return resp
+
+
+def _authenticate(hub: "StreamableHttpGateway", request: Request, request_id: Any):
+    """Resolve the caller for one request.
+
+    Returns `None` when the hub has no resolver (auth disabled — the session's
+    default principal is used), a `Principal` when a credential proves an
+    identity, or a 401 `JSONResponse` to be returned as-is when it doesn't. Every
+    request is re-authenticated, so a token revoked or expired mid-session is
+    refused on its very next call — the fail-closed revocation path.
+    """
+    if hub.resolver is None:
+        return None
+    try:
+        return hub.resolver.resolve(request.headers.get("authorization"))
+    except IdentityError as exc:
+        return _unauthorized(request_id, str(exc))
+
+
+def _enforce_session_owner(session: "_Session", auth, request_id: Any):
+    """A session belongs to the principal that created it. When auth is on, a
+    valid token for a *different* identity may not drive it — otherwise a session
+    id, which travels in a header, would be a bearer token of its own. Returns a
+    403 to return as-is, or None when the caller owns the session."""
+    if auth is None:
+        return None  # auth disabled on this hub
+    if session.gateway.principal.id != auth.id:
+        return _rpc_error(
+            request_id, ERROR_FORBIDDEN,
+            "forbidden: this session belongs to a different principal", 403,
+        )
+    return None
+
+
 async def _handle_post(hub: StreamableHttpGateway, request: Request):
     """POST semantics for one upstream hub. Shared by single- and multi-upstream
     apps so routing is the only thing that differs between them."""
@@ -269,9 +335,15 @@ async def _handle_post(hub: StreamableHttpGateway, request: Request):
     assert msg is not None
     session_id = request.headers.get(SESSION_HEADER)
 
-    # initialize with no session → mint one on this hub.
+    # Authenticate every request. A 401 here is fail-closed: a missing/expired/
+    # revoked credential never reaches the upstream.
+    auth = _authenticate(hub, request, msg.id)
+    if isinstance(auth, JSONResponse):
+        return auth
+
+    # initialize with no session → mint one on this hub, bound to this caller.
     if session_id is None and msg.method == METHOD_INITIALIZE:
-        session = await hub.create()
+        session = await hub.create(principal=auth)
         body = await session.handle_request(raw, msg.id)
         return _json_line(body, headers={SESSION_HEADER.title(): session.id})
 
@@ -280,6 +352,9 @@ async def _handle_post(hub: StreamableHttpGateway, request: Request):
     session = hub.get(session_id)
     if session is None:
         return _rpc_error(msg.id, -32001, "unknown or expired session", 404)
+    denied = _enforce_session_owner(session, auth, msg.id)
+    if denied is not None:
+        return denied
 
     if msg.is_request:
         body = await session.handle_request(raw, msg.id)
@@ -290,17 +365,31 @@ async def _handle_post(hub: StreamableHttpGateway, request: Request):
 
 
 async def _handle_get(hub: StreamableHttpGateway, request: Request):
+    auth = _authenticate(hub, request, None)
+    if isinstance(auth, JSONResponse):
+        return auth
     session_id = request.headers.get(SESSION_HEADER)
     session = hub.get(session_id) if session_id else None
     if session is None:
         return _rpc_error(None, -32001, "unknown or expired session", 404)
+    denied = _enforce_session_owner(session, auth, None)
+    if denied is not None:
+        return denied
     return StreamingResponse(session.sse_events(), media_type="text/event-stream")
 
 
 async def _handle_delete(hub: StreamableHttpGateway, request: Request):
+    auth = _authenticate(hub, request, None)
+    if isinstance(auth, JSONResponse):
+        return auth
     session_id = request.headers.get(SESSION_HEADER)
-    if not session_id or not await hub.terminate(session_id):
+    session = hub.get(session_id) if session_id else None
+    if session is None:
         return Response(status_code=404)
+    denied = _enforce_session_owner(session, auth, None)
+    if denied is not None:
+        return denied
+    await hub.terminate(session_id)
     return Response(status_code=204)
 
 

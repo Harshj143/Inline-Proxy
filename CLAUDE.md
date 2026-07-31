@@ -46,11 +46,12 @@ when the service/extra is absent; that's expected, not a failure.
 `src/mcp_gateway/`: `core/` (pipeline, gateway, session, failure posture),
 `policy/` (loader → merge → matcher → engine; `actions/`, `constraints/`),
 `redaction/` (engine, `detectors/`, `operators/`, vault), `sequence/` + `risk/`
-(taint + risk scoring), `approvals/`, `anomaly/`, `transports/` (stdio +
-streamable_http), `audit/` (events, spool, index), `state/` (memory/redis +
-sqlite/postgres index), `console/` (FastAPI ops console), `connectors/`
-(the connector framework — see below). Policy packs live in top-level
-`connectors/` and `policies/`; the JSON Schema is `policies/policy.schema.json`.
+(taint + risk scoring), `approvals/`, `anomaly/`, `identity/` (OIDC/JWKS +
+API-key auth → `Principal`), `transports/` (stdio + streamable_http), `audit/`
+(events, spool, index), `state/` (memory/redis + sqlite/postgres index),
+`console/` (FastAPI ops console), `connectors/` (the connector framework — see
+below). Policy packs live in top-level `connectors/` and `policies/`; the JSON
+Schema is `policies/policy.schema.json`.
 
 ## Connector packs
 

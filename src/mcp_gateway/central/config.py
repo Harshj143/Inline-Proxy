@@ -54,6 +54,10 @@ class GatewayConfig:
     state_backend: str = "memory"
     state_url: str | None = None  # e.g. redis://host:6379/0 when backend == redis
     names: frozenset[str] = field(default_factory=frozenset)
+    # Path to an identity.yaml (OIDC + API keys). When set, every endpoint
+    # requires an authenticated caller; when None, the service authenticates
+    # nobody (a trusted-network deployment behind its own gateway).
+    identity_path: str | None = None
 
 
 def load_gateway_config(path: str | Path) -> GatewayConfig:
@@ -115,12 +119,25 @@ def load_gateway_config(path: str | Path) -> GatewayConfig:
     if backend == "redis" and not state_url:
         raise GatewayError(f"{path}: state.backend 'redis' requires state.url")
 
+    identity = document.get("identity") or {}
+    if not isinstance(identity, dict):
+        raise GatewayError(f"{path}: 'identity' must be a mapping")
+    identity_ref = identity.get("config")
+    identity_path = None
+    if identity_ref:
+        if not isinstance(identity_ref, str):
+            raise GatewayError(f"{path}: identity.config must be a file path")
+        # Resolve relative to the gateway config's own directory, so a deployment
+        # can ship gateway.yaml + identity.yaml side by side.
+        identity_path = str((p.parent / identity_ref).resolve())
+
     return GatewayConfig(
         upstreams=upstreams,
         spool_path=str(spool_path),
         state_backend=backend,
         state_url=state_url,
         names=frozenset(seen),
+        identity_path=identity_path,
     )
 
 
@@ -128,6 +145,7 @@ def build_central_app(
     config: GatewayConfig,
     *,
     upstream_factory: Callable[[str, list[str]], Any] | None = None,
+    resolver: Any | None = None,
 ):
     """Assemble the central FastAPI app from a validated config.
 
@@ -135,6 +153,11 @@ def build_central_app(
     over a `PolicyEngine` loaded from its policy pack, sharing one audit spool.
     `upstream_factory(name, command)` is injectable for tests; the default
     launches a real `SubprocessUpstream`.
+
+    `resolver` is an `IdentityResolver`; when omitted it is loaded from
+    `config.identity_path` (if configured). Passing it directly lets tests inject
+    an offline-JWKS resolver. When there is no resolver, endpoints authenticate
+    nobody — the pre-Phase-9 behavior, for a trusted-network deployment.
     """
     from mcp_gateway.approvals import build_broker
     from mcp_gateway.audit.spool import JsonlSpool
@@ -150,6 +173,10 @@ def build_central_app(
     if upstream_factory is None:
         def upstream_factory(name: str, command: list[str]):  # noqa: ARG001
             return SubprocessUpstream(command)
+
+    if resolver is None and config.identity_path:
+        from mcp_gateway.identity import load_identity_config
+        resolver = load_identity_config(config.identity_path)
 
     # One shared session store across every upstream + every replica when
     # backend == redis; the default (memory) gives each gateway its own store.
@@ -173,7 +200,7 @@ def build_central_app(
             annotate={"transport": "streamable_http", "upstream": up.name,
                       "policy_source": engine.source},
         )
-        hubs[up.name] = StreamableHttpGateway(parts)
+        hubs[up.name] = StreamableHttpGateway(parts, resolver=resolver)
 
     return create_central_app(hubs), spool
 

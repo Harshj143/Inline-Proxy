@@ -127,7 +127,7 @@ Python **3.12+**. There is no conftest that sets the path — always prefix
 
 ```bash
 pip install -e '.[server,vault,redis,postgres,dev]'   # dev install with extras
-PYTHONPATH=src python3 -m pytest tests/ -q             # ~479 pass, a few skip cleanly
+PYTHONPATH=src python3 -m pytest tests/ -q             # ~574 pass, a few skip cleanly
 python3 -m ruff check src tests                        # lint — keep clean
 ```
 
@@ -234,11 +234,12 @@ tokenization vault + custom recognizers) · **3** (session controls: taint/
 sequence, risk auto-suspend, approvals broker, anomaly monitor) · **4** (Console
 v2) · **5** (Streamable HTTP + central mode + Redis/Postgres) · **6a** (connector
 framework) · **6b** (GitHub pack) · **7** (Jira pack) · **8** (Slack pack) ·
-**10** (Policy CI/CD: `policy ci` discover-and-check, `policy diff` blast-radius
-PR comment, Ed25519-signed policy bundles).
+**9** (OIDC identity: `identity/` — JWT/JWKS + API keys → `Principal`,
+per-request auth on the HTTP transport, fail-closed) · **10** (Policy CI/CD:
+`policy ci` discover-and-check, `policy diff` blast-radius PR comment,
+Ed25519-signed policy bundles).
 
-Remaining: **9** (OIDC identity — recommended next; principal-level audit
-enriches SIEM) · **11** (SIEM audit sinks: S3/Splunk/webhook, OCSF mapping) ·
+Remaining: **11** (SIEM audit sinks: S3/Splunk/webhook, OCSF mapping) ·
 **12** (DX & release polish: quickstarts, mkdocs site, Prometheus/healthz, SBOM).
 
 When you finish work, update `docs/PLAN.md` (checkboxes + the "You are here"

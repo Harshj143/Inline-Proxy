@@ -1,0 +1,46 @@
+# Identity config (Phase 9). Referenced from gateway.yaml as:
+#
+#   identity:
+#     config: identity.example.yaml
+#
+# When present, every /servers/<name>/mcp endpoint requires an authenticated
+# caller. A request carries its credential in the Authorization header:
+#
+#   Authorization: Bearer <jwt>     → validated against `oidc` below
+#   Authorization: ApiKey <key>     → looked up in `api_keys` below
+#
+# The token's IdP groups become the gateway `role` a pack's roles.yaml overlays,
+# so two users in different groups get different treatment on the same tool.
+# Everything fails closed: a missing, expired, revoked, or forged credential is
+# a 401, never an anonymous call.
+schema_version: 1
+
+oidc:
+  # Your IdP's issuer. Okta: https://<tenant>.okta.com/oauth2/default
+  #                    Auth0: https://<tenant>.us.auth0.com/
+  issuer: https://dev-12345.okta.com/oauth2/default
+  # The audience the token must have been minted for (the API/app id). str or list.
+  audience: api://mcp-gateway
+  # Optional. Defaults to <issuer>/v1/keys. Set explicitly for a non-Okta layout,
+  # e.g. Auth0's https://<tenant>.us.auth0.com/.well-known/jwks.json
+  # jwks_uri: https://dev-12345.okta.com/oauth2/default/v1/keys
+  leeway_seconds: 0             # grace on exp/nbf; 0 = strict (fail-closed)
+
+mapping:
+  subject_claim: sub            # → the principal id recorded on every audit event
+  groups_claim: groups          # Okta: "groups"; Auth0: often a namespaced claim
+  # ORDERED, most-privileged first: a user in several groups gets the first role.
+  groups:
+    mcp-admins: admin
+    mcp-release: release-manager
+    mcp-reviewers: reviewer
+  default_role: developer       # when no group matches (omit to grant no role)
+
+# Static keys for headless agents (CI, unattended bots) that can't do an OIDC
+# flow. Store the SHA-256 of the key, never the key itself:
+#   python -c "import hashlib,secrets; k=secrets.token_urlsafe(32); \
+#     print('key:', k); print('sha256:', hashlib.sha256(k.encode()).hexdigest())"
+api_keys:
+  - id: ci-bot
+    key_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    roles: [bot]                # bot writes are blocked by the shipped packs
