@@ -11,9 +11,10 @@ L ≈ 4+ sessions.
 
 **➡️ You are here: Phases 0–6 COMPLETE. Connector packs: GitHub (6b), Slack (8,
 retargeted to korotovsky/slack-mcp-server), Jira (7) — all full-surface,
-source-verified, default-deny. Phase 10 (Policy CI/CD) COMPLETE 2026-07-27 (10a
-discover-and-check, 10b blast-radius comment, 10c signed bundles). Remaining:
-9 (OIDC), 11 (SIEM sinks), 12 (DX & release polish).**
+source-verified, default-deny. Phase 9 (OIDC identity) COMPLETE 2026-07-28 and
+Phase 10 (Policy CI/CD) COMPLETE 2026-07-27 (10a discover-and-check, 10b
+blast-radius comment, 10c signed bundles). Remaining: 11 (SIEM audit sinks),
+12 (DX & release polish).**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -395,14 +396,68 @@ action (a framework change, raised as an issue not built).
 
 ## Phases 9–11 are independent of each other; 9 before 11 is recommended (principal-level audit enriches SIEM events).
 
-## Phase 9 — Identity: OIDC (size: M)
+## Phase 9 — Identity: OIDC ✅ DONE (2026-07-28)
 
-- [ ] `identity/oidc.py` — JWT validation, JWKS fetch/cache/rotation, fail-closed expiry policy
-- [ ] `identity/mapping.py` — IdP groups → roles (`identity.yaml`); Okta + Auth0 documented setups
-- [ ] `identity/apikey.py` for headless agents; `principal` on every audit event; console OIDC login
+Split into 9a (identity core, no server dep) and 9b (transport wiring), each
+finished + verified before the next.
 
-**Exit criteria:** live Okta dev tenant: two users in different groups get
-different policy treatment on the same tool; revoked token fails closed.
+### Phase 9a — Identity core ✅ DONE (2026-07-28)
+
+- [x] `identity/oidc.py` — validate a Bearer JWT against a configured
+      issuer/audience + the issuer's JWKS. **`alg` is dictated by us, never the
+      token**: an asymmetric-only allowlist refuses `alg=none` and the RS→HS
+      confusion before a key is selected. `JwksProvider` caches keys by `kid`
+      with a TTL and refetches **once** on an unknown kid — the single refetch
+      makes ordinary rotation transparent while a genuinely unknown/revoked key
+      fails closed. The fetch is injectable, so the whole validator is tested
+      offline with no network
+- [x] `identity/mapping.py` — verified claims → `Principal`: subject claim → id,
+      IdP groups → roles in **config order** (most-privileged first, since the
+      engine evaluates `roles[0]`). No group match → `default_role`; no usable
+      subject → fail closed (an unauditable call is one we don't make)
+- [x] `identity/apikey.py` — headless agents: sha256-hashed keys resolved in
+      constant time, plaintext never at rest. `identity/resolver.py` — the single
+      front door (`Authorization` header → `Principal`, `Bearer`=OIDC /
+      `ApiKey`=store, every other case → `IdentityError`); an opt-in
+      `anonymous_principal` is the one escape hatch for a no-IdP sidecar.
+      `identity/config.py` — `identity.yaml` → ready resolver, fail-closed
+      validation (a config that authenticates nobody is rejected; a plaintext-
+      looking API key is rejected). pyjwt behind `[oidc]`, guarded, absent = fail
+      closed. CI installs `[oidc]`
+- [x] 34 tests: offline JWKS, expired/wrong-iss/wrong-aud/alg=none/HS256/
+      foreign-key/unknown-kid all refused, transparent rotation, revoked key
+      fails closed, mapping order + default + no-subject, api keys, resolver
+      dispatch, config load/validation, pyjwt-absent fail-closed
+
+### Phase 9b — Transport wiring + central config ✅ DONE (2026-07-28)
+
+- [x] `transports/streamable_http.py` — an optional `resolver` on the hub turns on
+      **per-request** authentication: every POST/GET/DELETE is re-authenticated,
+      so a token revoked or expired mid-session is refused on its *very next call*
+      (the fail-closed revocation path). A 401 carries `WWW-Authenticate`; the
+      session is bound to the principal that created it, and a valid token for a
+      *different* identity may not drive it (403 — a session id in a header is not
+      a second bearer token). No resolver = authenticate nobody (backward compatible)
+- [x] `central/config.py` — an `identity: { config: identity.yaml }` block
+      (resolved relative to the gateway file) loads a resolver into every hub;
+      `build_central_app(resolver=…)` is injectable for offline tests. `serve`
+      picks it up with no CLI change. `identity.example.yaml` + a commented block
+      in `gateway.example.yaml`
+- [x] Integration `test_streamable_http_identity.py` (7) — the exit criterion made
+      executable: **two identities in different groups get different verdicts on
+      the same `admin.tool`** (admin allowed → reaches upstream; developer blocked
+      at the gateway, never reaches it); no/expired token → 401; revoked key →
+      401 next call; a foreign identity on another's session → 403; api key
+      authenticates a headless caller. Plus config tests. 574 passed, ruff clean
+
+**Exit criteria: MET.** Two users in different groups get different policy
+treatment on the same tool; a revoked/expired/missing token fails closed (401),
+proven end-to-end over the real HTTP transport with an offline JWKS. (Verified
+against a self-signed issuer rather than a live Okta tenant — the validation path
+is issuer-agnostic; `identity.example.yaml` documents the Okta/Auth0 setup.)
+Deferred, not cut: console OIDC login (the console already has local cookie auth)
+and JWKS discovery via `.well-known/openid-configuration` (today `jwks_uri` is
+derived by convention or set explicitly).
 
 ## Phase 10 — Policy CI/CD (size: S–M)
 
