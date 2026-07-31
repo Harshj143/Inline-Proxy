@@ -359,6 +359,45 @@ def _build_parser() -> argparse.ArgumentParser:
     reindex.add_argument("--incremental", action="store_true",
                          help="catch up from the stored watermark instead of a full rebuild")
 
+    forward = audit_sub.add_parser(
+        "forward",
+        help="stream the audit spool to a SIEM sink (S3, Splunk HEC, or a webhook)",
+        description=(
+            "A spool-reader that tails the JSONL spool from a durable watermark "
+            "and ships batches to a sink. It reads the spool, never the hot path, "
+            "so a slow or down sink never stalls a tool call; the watermark only "
+            "advances after a batch is accepted, so an outage drains with zero "
+            "loss on recovery (at-least-once)."
+        ),
+    )
+    forward.add_argument("--audit", default="audit.log", metavar="FILE",
+                         help="audit spool path (JSONL)")
+    forward.add_argument("--watermark", default=None, metavar="FILE",
+                         help="watermark file (default: <audit>.<sink>.wm)")
+    forward.add_argument("--sink", required=True,
+                         choices=["webhook", "splunk", "s3"],
+                         help="where to ship events")
+    forward.add_argument("--format", default="raw", choices=["raw", "ocsf", "ecs"],
+                         help="wire mapping applied to each event (default: raw)")
+    forward.add_argument("--batch-size", type=int, default=500, metavar="N")
+    forward.add_argument("--once", action="store_true",
+                         help="drain the current backlog and exit (else run forever)")
+    forward.add_argument("--poll-seconds", type=float, default=2.0, metavar="S")
+    # webhook / splunk
+    forward.add_argument("--url", default=None, metavar="URL",
+                         help="webhook endpoint, or Splunk base URL")
+    forward.add_argument("--header", action="append", default=None, metavar="K:V",
+                         help="extra HTTP header (webhook); repeatable")
+    forward.add_argument("--token-env", default=None, metavar="VAR",
+                         help="env var holding the Splunk HEC token (or webhook bearer)")
+    forward.add_argument("--sourcetype", default="mcp:gateway", metavar="TYPE",
+                         help="Splunk sourcetype (default: mcp:gateway)")
+    # s3
+    forward.add_argument("--bucket", default=None, metavar="NAME",
+                         help="S3 bucket (for --sink s3)")
+    forward.add_argument("--prefix", default="mcp-audit", metavar="KEY",
+                         help="S3 key prefix (default: mcp-audit)")
+
     redact = sub.add_parser(
         "redact",
         help="redact text/JSON through a profile, or print accuracy metrics",
