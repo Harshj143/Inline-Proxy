@@ -29,3 +29,14 @@ class ConnectorError(GatewayError):
     Raised at load/resolve time only, like PolicyError: the gateway refuses to
     bind an ill-formed connector rather than guessing at its security intent.
     """
+
+
+class IdentityError(GatewayError):
+    """A caller could not be authenticated, or identity is misconfigured.
+
+    Covers both a bad request-time credential (missing/expired/forged token, an
+    unknown API key) and a bad startup config (unparseable identity.yaml, no
+    crypto support). Either way the resolution failed, so — like every other
+    failure on the enforcement path — it is resolved closed: the call is refused,
+    never admitted as an anonymous or default principal.
+    """
