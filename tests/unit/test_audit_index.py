@@ -86,6 +86,21 @@ def test_incremental_catch_up_is_idempotent(tmp_path):
         assert index.counts_by_event()["tool_call_allowed"] == 2
 
 
+def test_catch_up_flags_rotation_instead_of_silently_stalling(tmp_path):
+    """The index is a byte-offset live-tail read model, not rotation-aware like
+    the SIEM forwarder. If the spool shrinks under it (rotated/truncated), it must
+    say so — never silently re-ingest colliding offsets or stall unnoticed."""
+    spool = tmp_path / "audit.log"
+    _spool(spool, _sample())
+    with AuditIndex(tmp_path / "audit.db") as index:
+        assert index.catch_up(spool)["rotated"] is False
+        # Simulate rotation: the live file is now a fresh, smaller file, so the
+        # stored offset is past its end.
+        spool.write_text('{"schema_version":1,"ts":"tX","event":"gateway_start"}\n')
+        result = index.catch_up(spool)
+        assert result["rotated"] is True and result["inserted"] == 0
+
+
 def test_session_detail_returns_chronological_events(tmp_path):
     spool = tmp_path / "audit.log"
     _spool(spool, _sample())

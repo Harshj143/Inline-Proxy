@@ -44,7 +44,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from mcp_gateway.audit.reader import read_spool
+from mcp_gateway.audit.reader import Cursor, _locate, _segment_files, read_segmented
 from mcp_gateway.audit.sinks.base import Sink, SinkError
 
 # event dict -> mapped dict, or None to drop the event (filtering/mapping).
@@ -63,37 +63,40 @@ class ForwardResult:
 
     ok: bool                 # did the (attempted) delivery succeed?
     delivered: int           # events handed to the sink and acked this tick
-    watermark: int           # byte offset consumed through
-    lag_bytes: int           # spool tail - watermark (unread backlog)
+    cursor: Cursor           # rotation-safe resume point consumed through
+    lag_bytes: int           # unread backlog across all segments
     bad_lines: int           # unparseable spool lines skipped this read
+    gap: bool = False        # a rotated-out segment was detected — events lost
     error: str | None = None
 
 
 class Watermark:
-    """A persistent byte offset into the spool, written atomically.
+    """A persistent rotation-safe `Cursor` into the spool, written atomically.
 
-    A crash mid-write must never corrupt the watermark into a garbage offset that
+    A crash mid-write must never corrupt the cursor into a garbage position that
     skips events, so it is written to a temp file and `os.replace`d (atomic on
-    POSIX). A missing or unreadable watermark reads as 0 — re-forward from the
-    start, which is safe under at-least-once (duplicates, never loss)."""
+    POSIX). A missing/unreadable cursor reads as an empty `Cursor` — re-forward
+    from the oldest available segment, safe under at-least-once (duplicates,
+    never loss). A legacy `{"offset": N}` file (pre-rotation) loads as a cursor
+    with no inode, so it, too, resumes from the oldest segment rather than
+    trusting a bare offset that rotation may have invalidated."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def load(self) -> int:
+    def load(self) -> Cursor:
         try:
             doc = json.loads(self.path.read_text(encoding="utf-8"))
-            offset = int(doc.get("offset", 0))
-            return offset if offset >= 0 else 0
+            return Cursor.from_dict(doc)
         except (FileNotFoundError, ValueError, OSError, TypeError):
-            return 0
+            return Cursor()
 
-    def store(self, offset: int) -> None:
+    def store(self, cursor: Cursor) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".wm-", suffix=".json")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump({"offset": offset}, fh)
+                json.dump(cursor.to_dict(), fh)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, self.path)
@@ -116,6 +119,7 @@ class Forwarder:
         mapper: EventMapper | None = None,
         alarm_lag_bytes: int = DEFAULT_ALARM_LAG_BYTES,
         on_alarm: Callable[[int], None] | None = None,
+        on_gap: Callable[[str], None] | None = None,
     ):
         self.spool_path = Path(spool_path)
         self.watermark = Watermark(watermark_path)
@@ -124,41 +128,50 @@ class Forwarder:
         self.mapper = mapper
         self.alarm_lag_bytes = alarm_lag_bytes
         self._on_alarm = on_alarm
+        self._on_gap = on_gap
 
-    def _spool_size(self) -> int:
-        try:
-            return self.spool_path.stat().st_size
-        except OSError:
-            return 0
+    def _lag_bytes(self, cursor: Cursor) -> int:
+        """Unread bytes across every segment from `cursor` forward."""
+        segments = _segment_files(self.spool_path)
+        start_idx, start_offset, _gap, _detail = _locate(cursor, segments)
+        lag = 0
+        for i in range(start_idx, len(segments)):
+            try:
+                size = segments[i].path.stat().st_size
+            except OSError:
+                continue
+            lag += size - (start_offset if i == start_idx else 0)
+        return max(0, lag)
 
     def pump_once(self) -> ForwardResult:
-        """Read up to one batch from the watermark and deliver it.
+        """Read up to one batch from the cursor and deliver it.
 
-        Delivers at most `batch_size` events, advancing the watermark only if the
-        sink accepts them. A large backlog drains across successive calls.
+        Reads at most `batch_size` events, transparently crossing rotation
+        boundaries, and advances the cursor only if the sink accepts them. A
+        rotated-out segment (real loss) is reported once, loudly, and does not
+        stop the drain — the remaining events still ship.
         """
         start = self.watermark.load()
-        result = read_spool(self.spool_path, start=start)
-        tail = self._spool_size()
+        result = read_segmented(self.spool_path, start, max_records=self.batch_size)
+        if result.gap and self._on_gap is not None:
+            self._on_gap(result.gap_detail)
 
         if not result.records:
-            # Nothing new. `next_offset` may still move past bad/blank lines, so
-            # persist it — we never want to re-scan skipped garbage forever.
-            if result.next_offset != start:
-                self.watermark.store(result.next_offset)
+            # Nothing new. The cursor may still move (past bad/blank lines, or to
+            # a fresh segment after a gap), so persist it — never re-scan forever.
+            if result.cursor != start:
+                self.watermark.store(result.cursor)
+            lag = self._lag_bytes(result.cursor)
+            self._maybe_alarm(lag)
             return ForwardResult(
-                ok=True, delivered=0, watermark=result.next_offset,
-                lag_bytes=max(0, tail - result.next_offset),
-                bad_lines=result.bad_lines,
+                ok=True, delivered=0, cursor=result.cursor, lag_bytes=lag,
+                bad_lines=result.bad_lines, gap=result.gap,
             )
 
-        chunk = result.records[: self.batch_size]
-        new_watermark = chunk[-1].end_offset
-
         # Map (and optionally drop) events. An all-dropped batch still advances
-        # the watermark — those events were consumed, just not forwarded.
+        # the cursor — those events were consumed, just not forwarded.
         batch: list[dict] = []
-        for record in chunk:
+        for record in result.records:
             mapped = self.mapper(record.event) if self.mapper else record.event
             if mapped is not None:
                 batch.append(mapped)
@@ -167,20 +180,20 @@ class Forwarder:
             try:
                 self.sink.deliver(batch)
             except SinkError as exc:
-                # Fail-in-place: do NOT advance the watermark. Retried next tick.
-                lag = max(0, tail - start)
+                # Fail-in-place: do NOT advance the cursor. Retried next tick.
+                lag = self._lag_bytes(start)
                 self._maybe_alarm(lag)
                 return ForwardResult(
-                    ok=False, delivered=0, watermark=start, lag_bytes=lag,
-                    bad_lines=result.bad_lines, error=str(exc),
+                    ok=False, delivered=0, cursor=start, lag_bytes=lag,
+                    bad_lines=result.bad_lines, gap=result.gap, error=str(exc),
                 )
 
-        self.watermark.store(new_watermark)
-        lag = max(0, tail - new_watermark)
+        self.watermark.store(result.cursor)
+        lag = self._lag_bytes(result.cursor)
         self._maybe_alarm(lag)
         return ForwardResult(
-            ok=True, delivered=len(batch), watermark=new_watermark,
-            lag_bytes=lag, bad_lines=result.bad_lines,
+            ok=True, delivered=len(batch), cursor=result.cursor,
+            lag_bytes=lag, bad_lines=result.bad_lines, gap=result.gap,
         )
 
     def _maybe_alarm(self, lag_bytes: int) -> None:
@@ -193,18 +206,21 @@ class Forwarder:
         Returns the last `ForwardResult`. Used by `--once` and by tests; the
         long-running `run` loop calls `pump_once` on a timer instead.
         """
-        last = ForwardResult(ok=True, delivered=0, watermark=self.watermark.load(),
+        last = ForwardResult(ok=True, delivered=0, cursor=self.watermark.load(),
                              lag_bytes=0, bad_lines=0)
         total = 0
+        gap = False
         while True:
             last = self.pump_once()
+            gap = gap or last.gap
             if not last.ok or last.delivered == 0:
                 break
             total += last.delivered
         # Report the cumulative delivered count for a drain.
         return ForwardResult(
-            ok=last.ok, delivered=total if last.ok else 0, watermark=last.watermark,
-            lag_bytes=last.lag_bytes, bad_lines=last.bad_lines, error=last.error,
+            ok=last.ok, delivered=total if last.ok else 0, cursor=last.cursor,
+            lag_bytes=last.lag_bytes, bad_lines=last.bad_lines, gap=gap,
+            error=last.error,
         )
 
     def run(

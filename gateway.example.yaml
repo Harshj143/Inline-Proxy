@@ -7,6 +7,11 @@
 
 audit:
   spool: audit.log            # JSONL audit spool (source of truth)
+  # rotate_bytes: 104857600   # roll the spool at 100 MiB (default: unbounded).
+  # keep: 10                   # retain this many rotated segments.
+  # Readers follow rotation by inode: `mcp-gateway audit forward` drains across
+  # rolls with zero loss. (The console index is a live-tail view; use the SIEM
+  # forwarder / S3 as the archive when rotation is on.)
 
 state:
   backend: memory             # memory today; redis/postgres arrive in Phase 5c
