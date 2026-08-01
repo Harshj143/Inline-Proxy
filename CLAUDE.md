@@ -54,7 +54,8 @@ below). Policy packs live in top-level `connectors/` and `policies/`; the JSON
 Schema is `policies/policy.schema.json`. `audit/forwarder.py` + `audit/sinks/`
 tail the spool to a SIEM (webhook/Splunk/S3) with an at-least-once watermark —
 they read the spool, never the hot path, so a down SIEM can't stall a call
-(`mcp-gateway audit forward`; see `sinks.example.md`).
+(`mcp-gateway audit forward`; see `sinks.example.md`). `observability/` adds a
+stdlib Prometheus `/metrics` + `/healthz`/`/readyz` (mounted on the server apps).
 
 ## Connector packs
 

@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from mcp_gateway import __version__
+
 # OCSF Application Activity (6006). activity_id: 1 Create, 3 Read, 4 Update, …;
 # we use the security-relevant subset plus a catch-all.
 _OCSF_CLASS_UID = 6006
@@ -74,8 +76,9 @@ def to_ocsf(event: dict[str, Any]) -> dict[str, Any]:
         "status_id": status_id,
         "status": "Failure" if denial else "Success",
         "metadata": {
-            "product": {"name": "MCP Security Gateway", "vendor_name": "mcp-gateway"},
-            "version": "1.4.0",
+            "product": {"name": "MCP Security Gateway", "vendor_name": "mcp-gateway",
+                        "version": __version__},
+            "version": "1.4.0",     # OCSF schema version this record conforms to
             "event_code": name,
         },
         "unmapped": event,      # preserve everything, lossless

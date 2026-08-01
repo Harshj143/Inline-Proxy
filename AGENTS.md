@@ -239,10 +239,12 @@ per-request auth on the HTTP transport, fail-closed) · **10** (Policy CI/CD:
 `policy ci` discover-and-check, `policy diff` blast-radius PR comment,
 Ed25519-signed policy bundles) · **11** (SIEM audit sinks: `audit/forwarder.py`
 tails the spool to webhook/Splunk-HEC/S3 sinks, OCSF/ECS mapping, at-least-once
-with a watermark — reads the spool, never the hot path).
+with a watermark — reads the spool, never the hot path) · **12** (DX & release
+polish: `observability/` Prometheus `/metrics` + `/healthz`/`/readyz`, README
+quickstart, release SBOM + CVE scan, prototype removed).
 
-Remaining: **12** (DX & release polish: quickstarts, mkdocs site,
-Prometheus/healthz, SBOM, delete the prototype).
+**All 12 phases complete.** Remaining: an mkdocs docs *site* (deferred — the docs
+already exist as markdown under `docs/`), plus whatever real deployments surface.
 
 When you finish work, update `docs/PLAN.md` (checkboxes + the "You are here"
 marker) and add/extend golden tests.
