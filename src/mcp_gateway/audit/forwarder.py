@@ -44,7 +44,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from mcp_gateway.audit.reader import Cursor, _segment_files, read_segmented
+from mcp_gateway.audit.reader import Cursor, _locate, _segment_files, read_segmented
 from mcp_gateway.audit.sinks.base import Sink, SinkError
 
 # event dict -> mapped dict, or None to drop the event (filtering/mapping).
@@ -132,17 +132,15 @@ class Forwarder:
 
     def _lag_bytes(self, cursor: Cursor) -> int:
         """Unread bytes across every segment from `cursor` forward."""
-        files = _segment_files(self.spool_path)
-        inodes = [ino for ino, _ in files]
-        start_idx = inodes.index(cursor.inode) if cursor.inode in inodes else 0
+        segments = _segment_files(self.spool_path)
+        start_idx, start_offset, _gap, _detail = _locate(cursor, segments)
         lag = 0
-        for i in range(start_idx, len(files)):
-            _ino, path = files[i]
+        for i in range(start_idx, len(segments)):
             try:
-                size = path.stat().st_size
+                size = segments[i].path.stat().st_size
             except OSError:
                 continue
-            lag += size - (cursor.offset if i == start_idx else 0)
+            lag += size - (start_offset if i == start_idx else 0)
         return max(0, lag)
 
     def pump_once(self) -> ForwardResult:

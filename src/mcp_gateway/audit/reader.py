@@ -116,23 +116,35 @@ def iter_spool(path: str | Path, start: int = 0) -> Iterator[SpoolRecord]:
 
 @dataclass(frozen=True, slots=True)
 class Cursor:
-    """A rotation-safe resume point: which file (by inode) and how far in."""
+    """A rotation-safe resume point.
 
-    inode: int | None = None     # None = "nothing consumed yet"
+    A rotated segment is identified by its monotonic **sequence number** (`seq`),
+    which the writer never reuses — so a pruned segment can never be confused with
+    a later one, even when the OS recycles the freed inode number (it does). The
+    **live** file has no seq yet, so it is identified by `inode` (a rename keeps
+    the inode, so a rotation of the live file is still followed correctly). A fresh
+    cursor has neither.
+    """
+
+    seq: int | None = None       # rotated-segment sequence; None = on the live file
+    inode: int | None = None     # live-file inode; None (with seq None) = fresh
     offset: int = 0
 
     def to_dict(self) -> dict[str, int]:
-        return {"inode": self.inode or 0, "offset": self.offset}
+        return {"seq": self.seq if self.seq is not None else -1,
+                "inode": self.inode or 0, "offset": self.offset}
 
     @classmethod
     def from_dict(cls, doc: Any) -> Cursor:
         if not isinstance(doc, dict):
             return cls()
+        seq = doc.get("seq")
+        seq = int(seq) if isinstance(seq, int) and seq >= 0 else None
         inode = doc.get("inode")
-        # A legacy watermark stored only {"offset": N}. Treat inode 0/absent as
-        # "unknown file": start from the oldest available segment (at-least-once,
-        # so re-reading is safe — the alternative would skip a rotated segment).
-        return cls(inode=inode or None, offset=int(doc.get("offset", 0)))
+        # A legacy watermark stored only {"offset": N} (no seq/inode). Resume from
+        # the oldest available segment rather than trust a bare offset rotation may
+        # have invalidated — safe under at-least-once (duplicates, never loss).
+        return cls(seq=seq, inode=inode or None, offset=int(doc.get("offset", 0)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,28 +157,29 @@ class SegmentedReadResult:
     gap_detail: str = ""
 
 
-def _segment_files(spool_path: Path) -> list[tuple[int, Path]]:
-    """Every spool segment in chronological order, as (inode, path).
+@dataclass(frozen=True, slots=True)
+class _Segment:
+    seq: int | None              # rotation sequence, or None for the live file
+    inode: int
+    path: Path
 
-    Rotated segments `audit.log.<NNNNNNNN>` (ascending seq = older→newer) come
-    first, then the live `audit.log` last. A file that vanishes mid-scan (pruned
-    under us) is skipped — the caller's gap check handles a missing cursor inode.
-    """
-    rotated: list[tuple[int, int, Path]] = []   # (seq, inode, path)
+
+def _segment_files(spool_path: Path) -> list[_Segment]:
+    """Every spool segment in chronological order: rotated `audit.log.<NNNN>`
+    (ascending seq = older→newer), then the live `audit.log` last."""
+    rotated: list[_Segment] = []
     for child in spool_path.parent.glob(spool_path.name + ".*"):
         suffix = child.name[len(spool_path.name) + 1:]
         if not suffix.isdigit():
             continue                     # not a rotation segment (e.g. .wm, .db)
-        try:
-            rotated.append((int(suffix), child.stat().st_ino, child))
-        except OSError:
-            continue
-    rotated.sort(key=lambda t: t[0])     # ascending seq = chronological
-    files: list[tuple[int, Path]] = [(ino, path) for _seq, ino, path in rotated]
+        with contextlib.suppress(OSError):
+            rotated.append(_Segment(int(suffix), child.stat().st_ino, child))
+    rotated.sort(key=lambda s: s.seq)    # type: ignore[arg-type,return-value]
+    segments: list[_Segment] = list(rotated)
     if spool_path.exists():
         with contextlib.suppress(OSError):
-            files.append((spool_path.stat().st_ino, spool_path))
-    return files
+            segments.append(_Segment(None, spool_path.stat().st_ino, spool_path))
+    return segments
 
 
 def read_segmented(
@@ -174,62 +187,77 @@ def read_segmented(
 ) -> SegmentedReadResult:
     """Read forward from `cursor` across rotated segments and the live file.
 
-    Resumes at the file whose inode the cursor names (found wherever rotation has
-    since moved it), reads its remainder, then drains each newer segment from the
-    start, up to `max_records`. The returned cursor is the exact resume point;
-    `gap` is True iff the cursor's segment had been rotated out (events lost).
+    Resumes at the segment the cursor names — a rotated one by its (reuse-proof)
+    sequence number, the live one by inode — reads its remainder, then drains each
+    newer segment from the start, up to `max_records`. `gap` is True iff the
+    cursor's segment had been pruned before it was read (events genuinely lost).
     """
     spool_path = Path(spool_path)
-    files = _segment_files(spool_path)
-    if not files:
+    segments = _segment_files(spool_path)
+    if not segments:
         return SegmentedReadResult([], cursor, 0, False)
 
-    inodes = [ino for ino, _ in files]
-    gap = False
-    gap_detail = ""
-    if cursor.inode is None:
-        start_idx, start_offset = 0, 0
-    elif cursor.inode in inodes:
-        start_idx, start_offset = inodes.index(cursor.inode), cursor.offset
-    else:
-        # The segment we were mid-read on is gone — rotated out before we caught
-        # up. Everything between the cursor and the oldest surviving segment is
-        # lost. Resume at the oldest available and shout about it.
-        gap = True
-        gap_detail = (
-            f"cursor segment (inode {cursor.inode}) was rotated out before it was "
-            f"read — audit events were lost; resuming at the oldest surviving segment"
-        )
-        start_idx, start_offset = 0, 0
+    start_idx, start_offset, gap, gap_detail = _locate(cursor, segments)
 
     records: list[SpoolRecord] = []
     bad_lines = 0
     torn_tail = False
     result_cursor = cursor
 
-    for i in range(start_idx, len(files)):
-        inode, path = files[i]
+    for i in range(start_idx, len(segments)):
+        seg = segments[i]
         offset = start_offset if i == start_idx else 0
-        is_live = i == len(files) - 1
-        res = read_spool(path, start=offset)
+        res = read_spool(seg.path, start=offset)
         bad_lines += res.bad_lines
         torn_tail = res.torn_tail        # only the live file can carry a torn tail
 
         for rec in res.records:
             records.append(rec)
-            result_cursor = Cursor(inode=inode, offset=rec.end_offset)
+            result_cursor = Cursor(seq=seg.seq, inode=seg.inode, offset=rec.end_offset)
             if max_records is not None and len(records) >= max_records:
                 return SegmentedReadResult(
                     records, result_cursor, bad_lines, torn_tail, gap, gap_detail
                 )
 
-        # Finished this file. If it's a drained rotated segment, advance the
-        # cursor to the next segment's start so a later prune of *this* segment
-        # can't be mistaken for a gap. If it's the live file, park at its end.
-        if is_live:
-            result_cursor = Cursor(inode=inode, offset=res.next_offset)
+        # Finished this segment. Advance the cursor to the NEXT segment's start so
+        # a later prune of *this* (now fully-drained) segment can't look like a
+        # gap. Parking on the live file's end is the steady-state resume point.
+        if i + 1 < len(segments):
+            nxt = segments[i + 1]
+            result_cursor = Cursor(seq=nxt.seq, inode=nxt.inode, offset=0)
         else:
-            next_inode, _next_path = files[i + 1]
-            result_cursor = Cursor(inode=next_inode, offset=0)
+            result_cursor = Cursor(seq=seg.seq, inode=seg.inode, offset=res.next_offset)
 
     return SegmentedReadResult(records, result_cursor, bad_lines, torn_tail, gap, gap_detail)
+
+
+def _locate(cursor: Cursor, segments: list[_Segment]) -> tuple[int, int, bool, str]:
+    """Where in `segments` the cursor resumes: (start index, start offset, gap?,
+    gap detail).
+
+    A rotated cursor (has a seq) is matched by seq — never reused, so a missing
+    seq means the segment was pruned unread = a gap. A live cursor (seq None,
+    inode set) is matched by inode, following the live file even after it rotated
+    into a segment. A fresh or legacy cursor (both None) starts at the oldest
+    segment from offset 0 — its stored offset, if any, is meaningless here and is
+    NOT applied to a segment it never named.
+    """
+    if cursor.seq is None and cursor.inode is None:
+        return 0, 0, False, ""                     # fresh/legacy: oldest, from 0
+    if cursor.seq is not None:
+        for idx, seg in enumerate(segments):
+            if seg.seq == cursor.seq:
+                return idx, cursor.offset, False, ""
+        return 0, 0, True, (
+            f"rotated segment #{cursor.seq} was pruned before it was read — audit "
+            f"events were lost; resuming at the oldest surviving segment"
+        )
+    # Live cursor: match the inode (a rename keeps it), so a live file that has
+    # since rotated is still resumed at its now-rotated position.
+    for idx, seg in enumerate(segments):
+        if seg.inode == cursor.inode:
+            return idx, cursor.offset, False, ""
+    return 0, 0, True, (
+        "the live segment being read was rotated out before it was caught up — "
+        "audit events may have been lost; resuming at the oldest surviving segment"
+    )
