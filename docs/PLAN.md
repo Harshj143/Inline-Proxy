@@ -11,10 +11,9 @@ L ≈ 4+ sessions.
 
 **➡️ You are here: Phases 0–6 COMPLETE. Connector packs: GitHub (6b), Slack (8,
 retargeted to korotovsky/slack-mcp-server), Jira (7) — all full-surface,
-source-verified, default-deny. Phase 9 (OIDC identity) COMPLETE 2026-07-28 and
-Phase 10 (Policy CI/CD) COMPLETE 2026-07-27 (10a discover-and-check, 10b
-blast-radius comment, 10c signed bundles). Remaining: 11 (SIEM audit sinks),
-12 (DX & release polish).**
+source-verified, default-deny. Phase 9 (OIDC identity) COMPLETE 2026-07-28,
+Phase 10 (Policy CI/CD) COMPLETE 2026-07-27, and Phase 11 (SIEM audit sinks)
+COMPLETE 2026-07-31. Remaining: 12 (DX & release polish).**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -613,14 +612,54 @@ answer different questions and both survive.
 **Exit criteria: MET.** Blast-radius comment posts (10b); a tampered bundle is
 rejected with an audit event and the gateway fails closed (10c, e2e-proven).
 
-## Phase 11 — Audit sinks: SIEM (size: M)
+## Phase 11 — Audit sinks: SIEM ✅ DONE (2026-07-31)
 
-- [ ] Spool-reader sink framework (at-least-once, batch, backoff, watermark alarm)
-- [ ] `sinks/s3.py` — gzip batches, `dt=/hour=` partitioned keys; `sinks/splunk.py` — HEC + retry; `sinks/webhook.py`
-- [ ] `audit/ocsf.py` — OCSF (and ECS) mapping; Splunk dashboard example in docs
+Realizes a separation the spool was built for from day one (`audit/spool.py`
+docstring): the hot path only *appends* to the spool; sinks *read* from it. So a
+slow or down SIEM can never stall a `tools/call` — that property is structural,
+not a feature to add.
 
-**Exit criteria:** SIEM outage test — sink down for an hour, zero loss, zero
-hot-path stalls, spool drains on recovery.
+- [x] `audit/forwarder.py` — the spool-reader pump, and the load-bearing piece.
+      Tails the JSONL spool from a persisted byte-offset **watermark**, batches
+      new events, maps them (optional), delivers to a `Sink`, and advances the
+      watermark **only after the sink accepts the batch**. That ordering is the
+      whole correctness argument: at-least-once (a crash between deliver and
+      watermark-write re-sends a batch — a duplicate, never a hole), zero
+      hot-path coupling (shares only the spool file, read-only), zero loss across
+      an outage (the backlog is just unread bytes; recovery reads from exactly
+      where it stopped). Atomic `Watermark`; `drain()` + `run()` with exponential
+      backoff and a **lag alarm** (backlog past a threshold → the operator learns
+      the SIEM is down before disk does)
+- [x] `audit/sinks/` — `base.py` (`Sink` ABC: `deliver(batch)` all-or-nothing,
+      raises `SinkError`; batch-level all-or-nothing is what keeps the watermark
+      honest), `webhook.py` (NDJSON/array POST, stdlib), `splunk.py` (HEC envelope
+      + `Splunk <token>` header, carries the gateway's own ts), `s3.py` (gzipped
+      NDJSON under Hive `dt=/hour=` partitions from the events' *own* timestamps;
+      boto3 behind `[s3]`, guarded → fail-closed setup error). Every transport is
+      injectable, so all three are tested with no network/AWS
+- [x] `audit/ocsf.py` — `to_ocsf` (OCSF Application Activity 6006: block→Deny/
+      Failure, allow→Allow/Success, principal→actor) + `to_ecs` (ECS `event.*`/
+      `user.*`), each **lossless** — the whole original event survives under
+      `unmapped`/`labels`, so no field is dropped to fit a schema. `MAPPERS`
+      drives the CLI `--format`
+- [x] `mcp-gateway audit forward --sink webhook|splunk|s3 --format raw|ocsf|ecs
+      [--once]` — a standalone process (own systemd unit / sidecar). `sinks.example.md`
+      documents webhook/Splunk/S3 setups + a starter OCSF Splunk dashboard
+- [x] Tests: `test_forwarder.py` (16 — the outage exit criterion: sink-down
+      freezes the watermark while events keep spooling, recovery drains
+      zero-loss in order; watermark-only-on-success; resume-from-watermark;
+      batch size; mapper/filter; lag alarm; backoff loop; corrupt watermark;
+      CLI `forward`), `test_sinks.py` (16), `test_ocsf.py` (10). Full suite green,
+      ruff clean
+
+**Exit criteria: MET.** The SIEM-outage scenario is `test_forwarder.py::
+test_outage_freezes_the_watermark_then_drains_zero_loss`: a down sink freezes the
+watermark, four more events spool during the outage (the hot path never stalls),
+and on recovery all nine drain in order, once each — zero loss. Deferred, not
+cut: a config-file form (`sinks.yaml`) to run several forwarders from one
+document (today each is its own `audit forward` process, which is the deployable
+unit); a dead-letter path for a permanently-poisoned batch (today it retries
+forever with backoff + the lag alarm, which is the safe default for an audit log).
 
 ## Phase 12 — DX & release polish (size: M)
 

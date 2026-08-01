@@ -993,6 +993,87 @@ def _run_audit_reindex(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _build_sink(ns: argparse.Namespace):
+    """Construct the SIEM sink named by --sink from the forward args (fail-closed
+    on a missing required option)."""
+    def _headers() -> dict[str, str]:
+        out: dict[str, str] = {}
+        for item in ns.header or []:
+            key, _, value = item.partition(":")
+            if not _:
+                raise GatewayError(f"--header must be 'Key: Value', got {item!r}")
+            out[key.strip()] = value.strip()
+        return out
+
+    def _token() -> str | None:
+        return os.environ.get(ns.token_env) if ns.token_env else None
+
+    if ns.sink == "webhook":
+        if not ns.url:
+            raise GatewayError("--sink webhook requires --url")
+        from mcp_gateway.audit.sinks.webhook import WebhookSink
+
+        headers = _headers()
+        token = _token()
+        if token:
+            headers.setdefault("Authorization", f"Bearer {token}")
+        return WebhookSink(ns.url, headers=headers)
+
+    if ns.sink == "splunk":
+        if not ns.url:
+            raise GatewayError("--sink splunk requires --url (the HEC base URL)")
+        token = _token()
+        if not token:
+            raise GatewayError("--sink splunk requires --token-env naming the HEC token var")
+        from mcp_gateway.audit.sinks.splunk import SplunkHecSink
+
+        return SplunkHecSink(ns.url, token, sourcetype=ns.sourcetype)
+
+    if ns.sink == "s3":
+        if not ns.bucket:
+            raise GatewayError("--sink s3 requires --bucket")
+        from mcp_gateway.audit.sinks.s3 import S3Sink
+
+        return S3Sink(ns.bucket, prefix=ns.prefix)   # raises if [s3] extra absent
+
+    raise GatewayError(f"unknown sink {ns.sink!r}")
+
+
+def _run_audit_forward(ns: argparse.Namespace) -> int:
+    from mcp_gateway.audit.forwarder import Forwarder
+    from mcp_gateway.audit.ocsf import MAPPERS
+
+    sink = _build_sink(ns)
+    watermark = ns.watermark or f"{ns.audit}.{sink.name}.wm"
+    forwarder = Forwarder(
+        ns.audit, watermark, sink,
+        batch_size=ns.batch_size,
+        mapper=MAPPERS[ns.format],
+        on_alarm=lambda lag: print(
+            f"warning: forwarder lag is {lag} bytes — is the {sink.name} sink down?",
+            file=sys.stderr,
+        ),
+    )
+    print(f"forwarding {ns.audit} -> {sink.name} (format={ns.format}, watermark={watermark})")
+
+    if ns.once:
+        result = forwarder.drain()
+        print(f"drained {result.delivered} event(s); watermark at {result.watermark}, "
+              f"{result.lag_bytes} byte(s) behind")
+        if not result.ok:
+            print(f"error: delivery failed: {result.error}", file=sys.stderr)
+            return 1
+        return 0
+
+    # Long-running: forward until interrupted. A dead sink backs off and retries;
+    # nothing is lost because the watermark never advances past an un-acked batch.
+    try:
+        forwarder.run(poll_seconds=ns.poll_seconds)
+    except KeyboardInterrupt:
+        print("\nstopped", file=sys.stderr)
+    return 0
+
+
 def _load_users_file(path: str):
     from mcp_gateway.console.auth import LocalUsers
 
@@ -1259,6 +1340,8 @@ def main(argv: list[str] | None = None) -> int:
                     return _run_policy_bundle_current(ns)
         if ns.command == "audit" and ns.audit_command == "reindex":
             return _run_audit_reindex(ns)
+        if ns.command == "audit" and ns.audit_command == "forward":
+            return _run_audit_forward(ns)
         if ns.command == "serve":
             return _run_serve(ns)
         if ns.command == "console":

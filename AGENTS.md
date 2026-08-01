@@ -237,10 +237,12 @@ framework) · **6b** (GitHub pack) · **7** (Jira pack) · **8** (Slack pack) ·
 **9** (OIDC identity: `identity/` — JWT/JWKS + API keys → `Principal`,
 per-request auth on the HTTP transport, fail-closed) · **10** (Policy CI/CD:
 `policy ci` discover-and-check, `policy diff` blast-radius PR comment,
-Ed25519-signed policy bundles).
+Ed25519-signed policy bundles) · **11** (SIEM audit sinks: `audit/forwarder.py`
+tails the spool to webhook/Splunk-HEC/S3 sinks, OCSF/ECS mapping, at-least-once
+with a watermark — reads the spool, never the hot path).
 
-Remaining: **11** (SIEM audit sinks: S3/Splunk/webhook, OCSF mapping) ·
-**12** (DX & release polish: quickstarts, mkdocs site, Prometheus/healthz, SBOM).
+Remaining: **12** (DX & release polish: quickstarts, mkdocs site,
+Prometheus/healthz, SBOM, delete the prototype).
 
 When you finish work, update `docs/PLAN.md` (checkboxes + the "You are here"
 marker) and add/extend golden tests.
