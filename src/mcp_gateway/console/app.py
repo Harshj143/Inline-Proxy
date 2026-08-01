@@ -88,6 +88,11 @@ def create_app(
         description="Read model, live feed, and human approvals over the audit spool.",
     )
 
+    from mcp_gateway.observability.asgi import mount_ops_endpoints
+    from mcp_gateway.observability.health import spool_writable_check
+
+    mount_ops_endpoints(app, readiness={"audit_spool": spool_writable_check(spool_path)})
+
     # ---------------------------------------------------------- dependencies
     def get_index():
         index = AuditIndex(index_path)

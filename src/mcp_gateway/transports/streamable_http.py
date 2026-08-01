@@ -233,20 +233,29 @@ def build_session_parts(
     broker=None,
     anomaly=None,
     store=None,
+    metrics_sink=None,
     annotate: dict[str, Any] | None = None,
 ) -> SessionParts:
     """A default `SessionParts` builder: each session shares the policy engine,
     redaction service, broker, spool, and (optionally) a shared session store,
     but gets its own gateway + recorder + upstream. The gateway is bound to the
     session id so its audit events carry the client's `Mcp-Session-Id`, and a
-    shared store (Redis) lets replicas resume the same session state."""
+    shared store (Redis) lets replicas resume the same session state.
+
+    `metrics_sink` is added to every session's recorder fan-out, so each decision
+    the gateway audits also increments a Prometheus counter (see
+    `observability/audit_metrics.py`). Defaults to the process metrics sink; pass
+    a sink over an isolated registry in tests."""
     from mcp_gateway.core.context import Principal
     from mcp_gateway.core.pipeline import default_pipeline
 
     principal = principal or Principal()
+    if metrics_sink is None:
+        from mcp_gateway.observability.audit_metrics import MetricsAuditSink
+        metrics_sink = MetricsAuditSink()
 
     def make(session_id: str) -> tuple[SecurityGateway, Upstream]:
-        recorder = AuditRecorder([_NonClosingSink(spool)])
+        recorder = AuditRecorder([_NonClosingSink(spool), metrics_sink])
         gateway = SecurityGateway(
             pipeline=default_pipeline(engine, redaction, broker),
             audit=recorder,
@@ -393,8 +402,11 @@ async def _handle_delete(hub: StreamableHttpGateway, request: Request):
     return Response(status_code=204)
 
 
-def create_streamable_http_app(gateway: StreamableHttpGateway, *, path: str = "/mcp"):
+def create_streamable_http_app(
+    gateway: StreamableHttpGateway, *, path: str = "/mcp", readiness=None
+):
     """Build a FastAPI app exposing ONE upstream over MCP Streamable HTTP."""
+    from mcp_gateway.observability.asgi import mount_ops_endpoints
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -404,6 +416,7 @@ def create_streamable_http_app(gateway: StreamableHttpGateway, *, path: str = "/
     app = FastAPI(
         title="MCP Security Gateway — Streamable HTTP", version="1", lifespan=lifespan
     )
+    mount_ops_endpoints(app, readiness=readiness)
 
     @app.post(path)
     async def post(request: Request):
@@ -420,7 +433,7 @@ def create_streamable_http_app(gateway: StreamableHttpGateway, *, path: str = "/
     return app
 
 
-def create_central_app(hubs: dict[str, StreamableHttpGateway]):
+def create_central_app(hubs: dict[str, StreamableHttpGateway], *, readiness=None):
     """Build a FastAPI app routing many upstreams at `/servers/<name>/mcp`.
 
     Each named upstream has its own hub (policy pack + session registry), so a
@@ -428,6 +441,7 @@ def create_central_app(hubs: dict[str, StreamableHttpGateway]):
     isolation keeps policy attribution and `tools/list` filtering trivial
     (docs/ARCHITECTURE.md §1). An unknown upstream name is a 404 (fail closed).
     """
+    from mcp_gateway.observability.asgi import mount_ops_endpoints
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -438,6 +452,7 @@ def create_central_app(hubs: dict[str, StreamableHttpGateway]):
     app = FastAPI(
         title="MCP Security Gateway — Central", version="1", lifespan=lifespan
     )
+    mount_ops_endpoints(app, readiness=readiness)
 
     def _hub(name: str) -> StreamableHttpGateway | None:
         return hubs.get(name)
