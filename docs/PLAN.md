@@ -11,9 +11,11 @@ L ≈ 4+ sessions.
 
 **➡️ You are here: Phases 0–6 COMPLETE. Connector packs: GitHub (6b), Slack (8,
 retargeted to korotovsky/slack-mcp-server), Jira (7) — all full-surface,
-source-verified, default-deny. Phase 9 (OIDC identity) COMPLETE 2026-07-28,
-Phase 10 (Policy CI/CD) COMPLETE 2026-07-27, and Phase 11 (SIEM audit sinks)
-COMPLETE 2026-07-31. Remaining: 12 (DX & release polish).**
+source-verified, default-deny. Phases 9 (OIDC identity), 10
+(Policy CI/CD), 11 (SIEM audit sinks), and 12 (DX & release polish) all COMPLETE
+(2026-07-27 → 07-31). **All 12 phases done** — the greenfield rebuild is
+feature-complete; remaining work is an mkdocs docs site (deferred, see Phase 12)
+and whatever real deployments surface.**
 
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
@@ -661,11 +663,55 @@ document (today each is its own `audit forward` process, which is the deployable
 unit); a dead-letter path for a permanently-poisoned batch (today it retries
 forever with backoff + the lag alarm, which is the safe default for an audit log).
 
-## Phase 12 — DX & release polish (size: M)
+## Phase 12 — DX & release polish (size: M) ✅ DONE (2026-07-31)
 
-- [ ] Quickstarts: `pipx install` sidecar in <5 min; `docker compose up` central demo
-- [ ] Docs site (mkdocs-material): concepts, per-connector threat models, policy reference from JSON Schema
-- [ ] Prometheus metrics + `/healthz` `/readyz`; SBOM per release; versioning policy; delete the prototype
+### Phase 12a — Observability ✅ DONE (2026-07-31)
+
+- [x] `observability/metrics.py` — a ~120-line **stdlib** Prometheus registry
+      (labeled Counter/Gauge → text exposition format). No dependency added: the
+      project hand-rolls its audit index and bundle format, and `/metrics` is just
+      a counter table (the no-heavy-deps golden rule). Labels are always *bounded*
+      sets (action, outcome, event name), never a tool name or principal id — an
+      unbounded label is how a metrics endpoint becomes the leak that takes down
+      what it observes
+- [x] `observability/audit_metrics.py` — a `MetricsAuditSink` on the recorder's
+      fan-out (exactly as `recorder.py`'s docstring anticipated), so every audited
+      decision bumps a counter with zero new call sites: `mcpgw_audit_events_total
+      {event}`, `mcpgw_tool_calls_total{outcome}`, `mcpgw_security_signals_total
+      {signal}`
+- [x] `observability/health.py` + `asgi.py` — `/healthz` (liveness: trivial,
+      **never** touches a downstream, so a SIEM/upstream outage can't get the
+      process killed) and `/readyz` (readiness: spool writable — the gateway fails
+      closed if it can't audit — plus ≥1 upstream; 503 pulls a replica out of
+      rotation without killing it). Mounted on the central, single-upstream, and
+      console apps (`include_in_schema=False`). 24 tests
+
+### Phase 12b — Quickstarts + release polish ✅ DONE (2026-07-31)
+
+- [x] **README rewritten** as an accurate front door — it still documented the
+      pre-Phase-3 prototype (`--role admin`, `python demo/run_demo.py`). Now: the
+      per-call action table, the sidecar 5-minute path (`wrap --connector github`),
+      the central `serve`/`docker compose up`, and a tour of connectors / redaction
+      / policy CI-CD + signed bundles / OIDC / SIEM sinks / observability, with the
+      design invariants
+- [x] **Prototype deleted.** Top-level `gateway/` + `dashboard/` (13 files, the
+      pre-Phase-0 reference) were provably orphaned — nothing in `src/`, `tests/`,
+      `demo/`, or `scripts/` imports them. `demo/` is KEPT: the new e2e tests
+      adopted `demo/mock_server.py` as a fixture
+- [x] `.github/workflows/release.yml` — on a `vX.Y.Z` tag: verify the tag matches
+      `pyproject` version, build sdist+wheel, generate a **CycloneDX SBOM** and a
+      **pip-audit** CVE scan, attach all to the GitHub release. A security proxy
+      shipping without a bill of materials asks operators to trust it blind. The
+      workflow header states the **versioning policy** (semver; MAJOR = a breaking
+      change to the policy/audit/bundle schema or the CLI contract)
+
+**Exit criteria: MET.** `/metrics` `/healthz` `/readyz` served and tested; a
+5-minute sidecar quickstart in the README; SBOM + CVE scan on every tagged
+release; the prototype removed. Deferred, not cut: an mkdocs-material docs **site**
+— the docs already exist as browsable markdown under `docs/` + `AGENTS.md` +
+`sinks.example.md`; a rendered site is presentation, and a JSON-Schema→reference
+generator is the one piece of real tooling in it, worth its own task rather than
+a rushed skeleton.
 
 ---
 

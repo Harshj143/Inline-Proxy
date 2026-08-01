@@ -202,7 +202,15 @@ def build_central_app(
         )
         hubs[up.name] = StreamableHttpGateway(parts, resolver=resolver)
 
-    return create_central_app(hubs), spool
+    from mcp_gateway.observability.health import (
+        spool_writable_check,
+        upstreams_configured_check,
+    )
+    readiness = {
+        "audit_spool": spool_writable_check(config.spool_path),
+        "upstreams": upstreams_configured_check(len(hubs)),
+    }
+    return create_central_app(hubs, readiness=readiness), spool
 
 
 def _build_store(config: GatewayConfig):
