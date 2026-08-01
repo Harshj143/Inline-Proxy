@@ -79,6 +79,32 @@ The `dt=`/`hour=` layout lets Athena/Glue/Security Lake prune by time. A backlog
 drained after an outage is partitioned by the events' **own** timestamps, so it
 lands in the hours it belongs to, not all in the recovery hour.
 
+## Spool rotation
+
+Left uncapped, `audit.log` grows without bound. Cap it and it rolls itself —
+`audit.log` → `audit.log.00000001` (monotonic, ascending = newer), a fresh live
+file, oldest segments pruned beyond `keep`:
+
+```bash
+mcp-gateway wrap --audit audit.log --audit-max-bytes 104857600 --audit-keep 10 -- <server>
+# central mode: audit: { rotate_bytes: 104857600, keep: 10 } in gateway.yaml
+```
+
+**The forwarder follows rotation losslessly.** It resumes by *inode*, not byte
+offset, so a rename is invisible to it — a slow or briefly-down forwarder keeps
+draining the rotated segment it was on, then the newer ones, then the live file,
+in order. If a consumer falls so far behind that a segment is pruned before it is
+read, those events are genuinely lost — and the forwarder says so loudly
+(`AUDIT GAP: …` on stderr, `on_gap`, and the lag alarm), never silently.
+
+Size `keep` for the longest outage a forwarder must survive: `keep × rotate_bytes`
+is the backlog window. With the SIEM archiving durably, rotation is safe to enable.
+
+> The console **index** is a byte-offset live-tail read model and does *not* track
+> across rotation — it flags rotation (`reindex` recovers the live segment) rather
+> than corrupt or stall silently. With rotation on, treat the SIEM forwarder + S3
+> as the archive/query surface and the console as a live ops view.
+
 ## Operational notes
 
 - **One process per sink.** Run several `audit forward` processes (each with its

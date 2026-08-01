@@ -87,6 +87,45 @@ identity:
     assert config.identity_path == str((tmp_path / "identity.yaml").resolve())
 
 
+def test_audit_rotation_settings_are_parsed(tmp_path):
+    cfg = _write(tmp_path, """
+audit:
+  spool: a.log
+  rotate_bytes: 1048576
+  keep: 5
+upstreams:
+  - name: only
+    command: ["x"]
+    policy: ["p.yaml"]
+""")
+    config = load_gateway_config(cfg)
+    assert config.spool_rotate_bytes == 1048576 and config.spool_keep == 5
+
+
+def test_rotation_defaults_to_unbounded(tmp_path):
+    cfg = _write(tmp_path, """
+upstreams:
+  - name: only
+    command: ["x"]
+    policy: ["p.yaml"]
+""")
+    config = load_gateway_config(cfg)
+    assert config.spool_rotate_bytes is None and config.spool_keep == 10
+
+
+def test_invalid_rotate_bytes_fails_closed(tmp_path):
+    cfg = _write(tmp_path, """
+audit:
+  rotate_bytes: -1
+upstreams:
+  - name: only
+    command: ["x"]
+    policy: ["p.yaml"]
+""")
+    with pytest.raises(GatewayError, match="rotate_bytes"):
+        load_gateway_config(cfg)
+
+
 def test_identity_block_must_be_a_mapping(tmp_path):
     cfg = _write(tmp_path, """
 upstreams:

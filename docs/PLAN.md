@@ -17,6 +17,17 @@ source-verified, default-deny. Phases 9 (OIDC identity), 10
 feature-complete; remaining work is an mkdocs docs site (deferred, see Phase 12)
 and whatever real deployments surface.**
 
+**Production hardening — spool rotation ✅ DONE (2026-07-31).** The audit spool
+grew unbounded and the byte-offset watermarks assumed a file that never rotates —
+a Day-2 disk problem *and* a silent-loss bug the moment anyone `logrotate`d it.
+Fixed: `JsonlSpool` rotates itself (`max_bytes`/`keep`, opt-in), and the durable
+consumers resume by **inode** via a rotation-safe `Cursor` + `read_segmented`
+(`audit/reader.py`) — the SIEM forwarder drains across rolls with zero loss and
+reports a pruned-out segment as a loud `gap`, never silently. The console index
+(a byte-offset live-tail read model) flags rotation rather than corrupt/stall.
+Wired via `wrap --audit-max-bytes/--audit-keep` and `audit.rotate_bytes/keep`.
+15 tests (`test_spool_rotation.py` + rotation cases in `test_forwarder.py`).
+
 **Cross-cutting: configurable fail-open/closed posture ✅ DONE (2026-07-19).**
 Customer-owned risk choice via `on_failure` in the policy document (global
 `open`/`closed`, or per-category `pipeline`/`redaction`/`approval`; default

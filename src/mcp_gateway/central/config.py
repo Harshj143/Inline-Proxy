@@ -51,6 +51,8 @@ class UpstreamConfig:
 class GatewayConfig:
     upstreams: list[UpstreamConfig]
     spool_path: str = "audit.log"
+    spool_rotate_bytes: int | None = None   # None = unbounded (no rotation)
+    spool_keep: int = 10
     state_backend: str = "memory"
     state_url: str | None = None  # e.g. redis://host:6379/0 when backend == redis
     names: frozenset[str] = field(default_factory=frozenset)
@@ -103,8 +105,14 @@ def load_gateway_config(path: str | Path) -> GatewayConfig:
             raise GatewayError(f"{where} ({name}): 'policy' must be one or more file paths")
         upstreams.append(UpstreamConfig(name=name, command=list(command), policy=list(policy)))
 
-    audit = document.get("audit") or {}
-    spool_path = audit.get("spool", "audit.log") if isinstance(audit, dict) else "audit.log"
+    audit = document.get("audit") if isinstance(document.get("audit"), dict) else {}
+    spool_path = audit.get("spool", "audit.log")
+    rotate_bytes = audit.get("rotate_bytes")
+    if rotate_bytes is not None and (not isinstance(rotate_bytes, int) or rotate_bytes <= 0):
+        raise GatewayError(f"{path}: audit.rotate_bytes must be a positive integer")
+    keep = audit.get("keep", 10)
+    if not isinstance(keep, int) or keep < 1:
+        raise GatewayError(f"{path}: audit.keep must be a positive integer")
 
     state = document.get("state") or {}
     if not isinstance(state, dict):
@@ -134,6 +142,8 @@ def load_gateway_config(path: str | Path) -> GatewayConfig:
     return GatewayConfig(
         upstreams=upstreams,
         spool_path=str(spool_path),
+        spool_rotate_bytes=rotate_bytes,
+        spool_keep=keep,
         state_backend=backend,
         state_url=state_url,
         names=frozenset(seen),
@@ -182,7 +192,11 @@ def build_central_app(
     # backend == redis; the default (memory) gives each gateway its own store.
     store = _build_store(config)
 
-    spool = JsonlSpool(config.spool_path)
+    spool = JsonlSpool(
+        config.spool_path,
+        max_bytes=config.spool_rotate_bytes,
+        keep=config.spool_keep,
+    )
     hubs: dict[str, StreamableHttpGateway] = {}
     for up in config.upstreams:
         engine = PolicyEngine.load(up.policy)

@@ -114,6 +114,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "against; without it a signed bundle is refused (fail closed)",
     )
     wrap.add_argument("--audit", default="audit.log", help="audit spool path (JSONL)")
+    wrap.add_argument("--audit-max-bytes", type=int, default=None, metavar="N",
+                      help="rotate the audit spool once it exceeds N bytes "
+                           "(default: no rotation — unbounded growth)")
+    wrap.add_argument("--audit-keep", type=int, default=10, metavar="N",
+                      help="retain N rotated audit segments (default: 10)")
     wrap.add_argument(
         "--principal",
         default="local",
@@ -639,7 +644,9 @@ def _run_wrap(ns: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
 
-    recorder = AuditRecorder([JsonlSpool(ns.audit)])
+    recorder = AuditRecorder([JsonlSpool(
+        ns.audit, max_bytes=ns.audit_max_bytes, keep=ns.audit_keep
+    )])
     # Bundle mode verifies before enforcing and audits a rejection before exit,
     # so the recorder must exist first. Non-bundle mode is unchanged.
     bundle_annotations: dict = {}
@@ -1053,13 +1060,13 @@ def _run_audit_forward(ns: argparse.Namespace) -> int:
             f"warning: forwarder lag is {lag} bytes — is the {sink.name} sink down?",
             file=sys.stderr,
         ),
+        on_gap=lambda detail: print(f"AUDIT GAP: {detail}", file=sys.stderr),
     )
     print(f"forwarding {ns.audit} -> {sink.name} (format={ns.format}, watermark={watermark})")
 
     if ns.once:
         result = forwarder.drain()
-        print(f"drained {result.delivered} event(s); watermark at {result.watermark}, "
-              f"{result.lag_bytes} byte(s) behind")
+        print(f"drained {result.delivered} event(s); {result.lag_bytes} byte(s) behind")
         if not result.ok:
             print(f"error: delivery failed: {result.error}", file=sys.stderr)
             return 1

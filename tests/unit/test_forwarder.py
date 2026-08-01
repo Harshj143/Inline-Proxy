@@ -15,6 +15,7 @@ import json
 import pytest
 
 from mcp_gateway.audit.forwarder import Forwarder, Watermark
+from mcp_gateway.audit.reader import Cursor
 from mcp_gateway.audit.sinks.base import Sink, SinkError
 
 
@@ -89,12 +90,12 @@ def test_watermark_advances_only_after_a_successful_delivery(spool):
 
     sink.up = False
     assert fwd.pump_once().ok is False
-    assert fwd.watermark.load() == 0               # no delivery → no advance
+    assert fwd.watermark.load().offset == 0        # no delivery → no advance
 
     sink.up = True
     result = fwd.pump_once()
     assert result.ok and result.delivered == 3
-    assert fwd.watermark.load() == result.watermark > 0
+    assert fwd.watermark.load().offset == result.cursor.offset > 0
 
 
 def test_a_fresh_forwarder_resumes_from_the_persisted_watermark(spool):
@@ -102,7 +103,7 @@ def test_a_fresh_forwarder_resumes_from_the_persisted_watermark(spool):
     append(4)
     first = _forwarder(path, RecordingSink())
     first.drain()
-    offset = first.watermark.load()
+    offset = first.watermark.load().offset
 
     # A brand-new forwarder (process restart) over the same spool + watermark
     # must not re-ship what the first one already delivered.
@@ -111,7 +112,7 @@ def test_a_fresh_forwarder_resumes_from_the_persisted_watermark(spool):
     second = _forwarder(path, second_sink)
     second.drain()
     assert _seqs(second_sink) == [4, 5]            # only the new events
-    assert second.watermark.load() > offset
+    assert second.watermark.load().offset > offset
 
 
 def test_batches_respect_batch_size(spool):
@@ -129,7 +130,7 @@ def test_batches_respect_batch_size(spool):
 def test_empty_spool_is_a_no_op(spool):
     path, _ = spool
     result = _forwarder(path, RecordingSink()).pump_once()
-    assert result.ok and result.delivered == 0 and result.watermark == 0
+    assert result.ok and result.delivered == 0 and result.cursor.offset == 0
 
 
 # ------------------------------------------------------------ mapping/filter
@@ -151,7 +152,7 @@ def test_mapper_returning_none_drops_the_event_but_still_advances(spool):
     append(4)
     fwd.drain()
     assert _seqs(sink) == [1, 3]
-    assert fwd.watermark.load() > 0                # advanced past the dropped ones
+    assert fwd.watermark.load().offset > 0         # advanced past the dropped ones
 
 
 def test_all_dropped_batch_still_advances_the_watermark(spool):
@@ -161,7 +162,7 @@ def test_all_dropped_batch_still_advances_the_watermark(spool):
     append(3)
     result = fwd.pump_once()
     assert result.ok and result.delivered == 0
-    assert result.watermark > 0                    # consumed, just not forwarded
+    assert result.cursor.offset > 0                # consumed, just not forwarded
     assert sink.deliveries == 0                     # sink never called for an empty batch
 
 
@@ -217,10 +218,10 @@ def test_run_loop_polls_when_caught_up(spool):
 # ------------------------------------------------------------ watermark file
 def test_watermark_survives_a_corrupt_file(tmp_path):
     wm = Watermark(tmp_path / "wm.json")
-    wm.store(42)
-    assert wm.load() == 42
+    wm.store(Cursor(inode=7, offset=42))
+    assert wm.load() == Cursor(inode=7, offset=42)
     (tmp_path / "wm.json").write_text("{ not json")
-    assert wm.load() == 0                            # corrupt → re-forward from 0 (safe)
+    assert wm.load() == Cursor()                     # corrupt → re-forward from start (safe)
 
 
 def test_bad_spool_lines_are_skipped_not_fatal(spool):
@@ -232,7 +233,7 @@ def test_bad_spool_lines_are_skipped_not_fatal(spool):
     fwd = _forwarder(path, sink)
     fwd.drain()
     assert _seqs(sink) == [99]                        # good event delivered, garbage skipped
-    assert fwd.watermark.load() == path.stat().st_size  # consumed the whole file
+    assert fwd.watermark.load().offset == path.stat().st_size  # consumed the whole file
 
 
 # ------------------------------------------------------------ CLI: audit forward
@@ -284,3 +285,98 @@ def test_cli_forward_reports_a_delivery_failure(spool, monkeypatch):
         "--sink", "webhook", "--url", "https://x/in", "--once",
     ])
     assert code == 1                                    # --once surfaces the failure
+
+
+# ---------------------------------------------------- rotation (the #2 fix)
+def _rotating_spool(tmp_path, max_bytes):
+    """A real JsonlSpool with rotation, plus a synchronous append helper."""
+    import asyncio
+
+    from mcp_gateway.audit.spool import JsonlSpool
+
+    path = tmp_path / "audit.log"
+    spool = JsonlSpool(path, max_bytes=max_bytes, keep=100)
+
+    def append(n, start=0):
+        async def run():
+            for i in range(start, start + n):
+                await spool.emit({"event": "tool_call_allowed", "seq": i})
+        asyncio.run(run())
+
+    return path, spool, append
+
+
+def _segment_count(path):
+    return len(list(path.parent.glob(path.name + ".*")))
+
+
+def test_forwarder_drains_across_rotation_with_zero_loss(tmp_path):
+    """The core of the #2 fix: the spool rotates under the forwarder, and every
+    event still arrives exactly once, in order — the byte-offset watermark would
+    have lost the rotated segments."""
+    path, spool, append = _rotating_spool(tmp_path, max_bytes=60)  # rotates every ~2 events
+    append(10)
+    assert _segment_count(path) >= 3, "expected the spool to have rotated"
+
+    sink = RecordingSink()
+    fwd = _forwarder(path, sink, batch_size=3)
+    fwd.drain()
+    assert _seqs(sink) == list(range(10))              # all ten, in order, across segments
+
+
+def test_forwarder_follows_rotation_that_happens_mid_stream(tmp_path):
+    path, spool, append = _rotating_spool(tmp_path, max_bytes=60)
+    sink = RecordingSink()
+    fwd = _forwarder(path, sink, batch_size=100)
+
+    append(3)
+    fwd.drain()
+    assert _seqs(sink) == [0, 1, 2]
+
+    # More events arrive AND the file rotates several times before the next drain.
+    append(12, start=3)
+    fwd.drain()
+    assert _seqs(sink) == list(range(15))              # resumed by inode across every roll
+
+
+def test_forwarder_survives_a_restart_across_rotation(tmp_path):
+    path, spool, append = _rotating_spool(tmp_path, max_bytes=60)
+    append(6)
+    _forwarder(path, RecordingSink()).drain()          # first forwarder consumes some
+
+    append(6, start=6)                                 # more events + more rotations
+    second_sink = RecordingSink()
+    _forwarder(path, second_sink).drain()              # a fresh process, same watermark file
+    assert _seqs(second_sink) == list(range(6, 12))    # resumes exactly, no re-ship, no loss
+
+
+def test_pruned_segment_is_reported_as_a_gap_not_silent(tmp_path):
+    """If a slow consumer falls behind the `keep` window, the rotated-out events
+    are genuinely lost — but that must be LOUD, never a silent hole."""
+    import asyncio
+
+    from mcp_gateway.audit.spool import JsonlSpool
+
+    path = tmp_path / "audit.log"
+    spool = JsonlSpool(path, max_bytes=60, keep=1)      # keep only 1 rotated segment
+
+    async def emit(n, start=0):
+        for i in range(start, start + n):
+            await spool.emit({"event": "tool_call_allowed", "seq": i})
+
+    sink = RecordingSink()
+    wm = str(path) + ".wm"
+    asyncio.run(emit(2))
+    Forwarder(path, wm, sink, batch_size=2).drain()    # consume the first couple
+    consumed = len(sink.received)
+
+    # Now flood: many rotations prune the segment the cursor was parked on.
+    asyncio.run(emit(20, start=2))
+    gaps: list[str] = []
+    # A fresh forwarder over the SAME watermark file: its cursor points at a
+    # segment that has since been rotated out and deleted.
+    result = Forwarder(path, wm, sink, batch_size=100, on_gap=gaps.append).drain()
+    assert result.gap is True and gaps, "a rotated-out segment must raise a gap"
+    assert "lost" in gaps[0]
+    # It still recovers and ships everything currently on disk (no crash, no stall).
+    assert len(sink.received) > consumed

@@ -180,8 +180,26 @@ class AuditIndex:
         )
 
     def catch_up(self, spool_path: str | Path) -> dict[str, Any]:
-        """Ingest new spool records since the stored watermark. Idempotent."""
-        result = read_spool(spool_path, start=self.next_offset())
+        """Ingest new spool records since the stored watermark. Idempotent.
+
+        The index is a live-tail read model keyed by byte offset, so it assumes a
+        single, non-rotating spool file (unlike the SIEM forwarder, which follows
+        rotation by inode). If the stored offset is past the current file end —
+        the spool was rotated or truncated out from under us — we do NOT silently
+        stall or re-ingest colliding offsets; we flag `rotated` so the caller can
+        tell the operator to `audit reindex` (or rely on the SIEM archive, which
+        loses nothing across rotation)."""
+        start = self.next_offset()
+        try:
+            live_size = Path(spool_path).stat().st_size
+        except OSError:
+            live_size = 0
+        if start > live_size:
+            return {
+                "inserted": 0, "next_offset": start, "bad_lines": 0,
+                "torn_tail": False, "rotated": True,
+            }
+        result = read_spool(spool_path, start=start)
         inserted = self.ingest(result.records)
         self._set_next_offset(result.next_offset)
         self._conn.commit()
@@ -190,6 +208,7 @@ class AuditIndex:
             "next_offset": result.next_offset,
             "bad_lines": result.bad_lines,
             "torn_tail": result.torn_tail,
+            "rotated": False,
         }
 
     def rebuild(self, spool_path: str | Path) -> dict[str, Any]:
